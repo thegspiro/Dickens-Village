@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% from "_macros.html" import condition_badge, storage_text, text, select, field_error %}
+{% block title %}{{ item.name }}{% endblock %}
+{% block content %}
+<div class="title-row">
+  <h1>{{ item.name }} <span class="muted">· {{ CATEGORIES[item.category] }}</span></h1>
+  <div class="actions">
+    <a class="button" href="{{ url_for('main.item_edit', item_id=item.id) }}">Edit</a>
+    <a class="button danger" href="{{ url_for('main.item_delete', item_id=item.id) }}">Delete</a>
+  </div>
+</div>
+
+<div class="columns">
+  <section class="card">
+    <h2>Details</h2>
+    <dl class="details">
+      <dt>Item number</dt><dd>{{ item.item_number or '—' }}</dd>
+      <dt>Series</dt><dd>{{ item.series or '—' }}</dd>
+      <dt>Introduced / retired</dt><dd>{{ item.year_introduced or '?' }} – {{ item.year_retired or ('?' if item.year_introduced else '') }}</dd>
+      <dt>Condition</dt><dd>{{ condition_badge(item.condition_grade) }}{% if item.condition_checked_on %} <span class="muted">checked {{ item.condition_checked_on | nicedate }}</span>{% endif %}</dd>
+      {% if item.condition_notes %}<dt>Condition notes</dt><dd class="pre">{{ item.condition_notes }}</dd>{% endif %}
+      <dt>Box / sleeve</dt><dd>{{ 'Original box' if item.has_original_box else 'No box' }} · {{ 'Sleeve' if item.has_sleeve else 'No sleeve' }}</dd>
+      <dt>Storage</dt><dd>{{ storage_text(item) }}{% if item.on_display %} <span class="badge">On display</span>{% endif %}</dd>
+      <dt>Purchased</dt><dd>{{ item.purchase_date | nicedate or '—' }}{% if item.purchased_from %} from {{ item.purchased_from }}{% endif %}</dd>
+      <dt>Price paid</dt><dd>{{ item.price_paid | money or '—' }}</dd>
+      <dt>Estimated value</dt><dd>{{ item.estimated_value | money or '—' }}</dd>
+      {% if item.notes %}<dt>Notes</dt><dd class="pre">{{ item.notes }}</dd>{% endif %}
+    </dl>
+  </section>
+
+  <section class="card" id="photos">
+    <h2>Photos</h2>
+    {% if photos %}
+    <div class="photos">
+      {% for p in photos %}
+      <figure>
+        <a href="{{ url_for('main.photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.photo_file', photo_id=p.id) }}" alt="Photo of {{ item.name }}" loading="lazy"></a>
+        <form method="post" action="{{ url_for('main.photo_delete', photo_id=p.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="link danger">Remove</button>
+        </form>
+      </figure>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">No photos yet.</p>{% endif %}
+    <form method="post" action="{{ url_for('main.photo_add', item_id=item.id) }}" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="photo">Add a photo (JPEG, PNG or WebP)</label>
+      <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" required>
+      <button type="submit">Upload</button>
+    </form>
+  </section>
+</div>
+
+<section class="card" id="extras">
+  <h2>Extras {% if item.extras_count %}<span class="muted">({{ item.extras_count }})</span>{% endif %}</h2>
+  <p class="muted">Pieces that go with this item, such as light cords, bulbs, signs or small attached accessories.</p>
+  {% if extras %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Extra</th><th class="num">Qty</th><th>Condition</th><th>Notes</th><th></th></tr></thead>
+    <tbody>
+    {% for e in extras %}
+      <tr>
+        <td>{{ e.description }}</td>
+        <td class="num">{{ e.quantity }}</td>
+        <td>{{ condition_badge(e.condition_grade) }}</td>
+        <td>{{ e.notes or '' }}</td>
+        <td class="row-actions">
+          <a href="{{ url_for('main.extra_edit', item_id=item.id, extra_id=e.id) }}">Edit</a>
+          <form method="post" action="{{ url_for('main.extra_delete', item_id=item.id, extra_id=e.id) }}" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="link danger">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p>No extras recorded.</p>{% endif %}
+
+  <h3>Add an extra</h3>
+  {% if extra_errors %}<p class="flash flash-error" role="alert">Please fix the highlighted fields.</p>{% endif %}
+  <form method="post" action="{{ url_for('main.extra_add', item_id=item.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="grid">
+      <div class="wide">{{ text(extra_form, extra_errors, 'description', 'Description', 200, required=True) }}</div>
+      <div>{{ text(extra_form, extra_errors, 'quantity', 'Quantity', 3, extra='inputmode="numeric" placeholder="1"') }}</div>
+      <div>{{ select(extra_form, extra_errors, 'condition_grade', 'Condition', CONDITIONS, blank='Not graded') }}</div>
+      <div class="wide">{{ text(extra_form, extra_errors, 'notes', 'Notes', 1000) }}</div>
+    </div>
+    <button type="submit">Add extra</button>
+  </form>
+</section>
+
+<section class="card" id="links">
+  <h2>{{ 'Figures and accessories for this building' if item.category == 'building' else 'Goes with these buildings' }}</h2>
+  {% if links %}
+  <ul class="links">
+    {% for l in links %}
+    <li>
+      <a href="{{ url_for('main.item_detail', item_id=l.id) }}">{{ l.name }}</a>
+      <span class="muted">{{ CATEGORIES[l.category] }}{% if l.item_number %} · #{{ l.item_number }}{% endif %}</span>
+      <form method="post" action="{{ url_for('main.link_delete', item_id=item.id, other_id=l.id) }}" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link danger">Unlink</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">Nothing linked yet.</p>{% endif %}
+  {% if link_candidates %}
+  <form method="post" action="{{ url_for('main.link_add', item_id=item.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="other_id">Link {{ 'a figure or accessory' if item.category == 'building' else 'a building' }}</label>
+    <select id="other_id" name="other_id" required>
+      <option value="">Choose…</option>
+      {% for c in link_candidates %}<option value="{{ c.id }}">{{ c.name }}{% if c.item_number %} (#{{ c.item_number }}){% endif %}</option>{% endfor %}
+    </select>
+    <button type="submit">Link</button>
+  </form>
+  {% endif %}
+</section>
+<p class="muted">Added {{ item.created_at | nicedate }} · Updated {{ item.updated_at | nicedate }}</p>
+{% endblock %}

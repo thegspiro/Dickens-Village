@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Collection{% endblock %} · Dickens Village Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{{ url_for('main.item_list') }}">Dickens Village Tracker</a>
+    {% if current_user() %}
+    <nav aria-label="Main">
+      <a href="{{ url_for('main.item_list') }}">Collection</a>
+      <a href="{{ url_for('main.storage') }}">Storage</a>
+      <a href="{{ url_for('main.summary') }}">Summary</a>
+      <a class="button" href="{{ url_for('main.item_new') }}">Add piece</a>
+      <form method="post" action="{{ url_for('main.logout') }}" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link">Log out</button>
+      </form>
+    </nav>
+    {% endif %}
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <p class="flash flash-{{ category }}" role="status">{{ message }}</p>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

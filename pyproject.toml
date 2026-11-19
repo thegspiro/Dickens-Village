@@ -1,0 +1,10 @@
+[project]
+name = "dickens-village-tracker"
+version = "0.1.0"
+description = "Self-hosted tracker for a Department 56 Dickens' Village collection"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs a MySQL server (set TEST_DB_HOST)"]
+addopts = "-ra"
