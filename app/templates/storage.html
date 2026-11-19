@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Storage{% endblock %}
+{% block content %}
+<h1>Storage</h1>
+<p class="muted">Every location, tub and tray in use, with how many pieces are in each. Click a row to see what's in it.</p>
+{% if rows %}
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Location</th><th>Tub</th><th>Tray</th><th class="num">Pieces</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      {% if not r.storage_location and not r.storage_tub and not r.storage_tray %}
+        <td colspan="3"><a href="{{ r.href }}">Not assigned to storage</a></td>
+      {% else %}
+        <td><a href="{{ r.href }}">{{ r.storage_location or '—' }}</a></td>
+        <td>{{ r.storage_tub or '—' }}</td>
+        <td>{{ r.storage_tray or '—' }}</td>
+      {% endif %}
+      <td class="num">{{ r.item_count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}<p class="card">No pieces yet.</p>{% endif %}
+{% endblock %}

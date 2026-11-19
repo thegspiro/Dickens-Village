@@ -1,0 +1,35 @@
+# Runs the full test suite, including MySQL integration tests, in throwaway containers:
+#   docker compose -f docker-compose.test.yml run --rm tests
+#   docker compose -f docker-compose.test.yml down -v
+name: dickens-village-test
+
+services:
+  test-db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: dickens_test
+      MYSQL_USER: dickens_test
+      MYSQL_PASSWORD: dickens_test_only
+      MYSQL_ROOT_PASSWORD: dickens_test_root_only
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -udickens_test -pdickens_test_only --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  tests:
+    build:
+      context: .
+      target: test
+    depends_on:
+      test-db:
+        condition: service_healthy
+    environment:
+      TEST_DB_HOST: test-db
+      TEST_DB_PORT: "3306"
+      TEST_DB_NAME: dickens_test
+      TEST_DB_USER: dickens_test
+      TEST_DB_PASSWORD: dickens_test_only

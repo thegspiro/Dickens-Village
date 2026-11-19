@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Summary{% endblock %}
+{% block content %}
+{% set t = summary.totals %}
+<h1>Collection summary</h1>
+<div class="stats">
+  <div class="stat"><span class="stat-value">{{ t.item_count }}</span><span class="stat-label">Pieces</span></div>
+  <div class="stat"><span class="stat-value">{{ t.extras_count }}</span><span class="stat-label">Extras</span></div>
+  <div class="stat"><span class="stat-value">{{ t.total_paid | money }}</span><span class="stat-label">Total paid</span></div>
+  <div class="stat"><span class="stat-value">{{ t.total_value | money }}</span><span class="stat-label">Estimated value</span></div>
+  <div class="stat"><span class="stat-value">{{ t.on_display }}</span><span class="stat-label">On display</span></div>
+  <div class="stat"><span class="stat-value">{{ t.with_box }}</span><span class="stat-label">With original box</span></div>
+</div>
+
+<div class="columns">
+<section class="card">
+  <h2>By category</h2>
+  <table>
+    <thead><tr><th>Category</th><th class="num">Pieces</th><th class="num">Paid</th><th class="num">Est. value</th></tr></thead>
+    <tbody>
+    {% for r in summary.by_category %}
+      <tr>
+        <td><a href="{{ url_for('main.item_list', category=r.category) }}">{{ CATEGORIES[r.category] }}</a></td>
+        <td class="num">{{ r.item_count }}</td><td class="num">{{ r.total_paid | money }}</td><td class="num">{{ r.total_value | money }}</td>
+      </tr>
+    {% else %}<tr><td colspan="4" class="muted">No pieces yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+<section class="card">
+  <h2>By condition</h2>
+  <table>
+    <thead><tr><th>Condition</th><th class="num">Pieces</th></tr></thead>
+    <tbody>
+    {% for r in summary.by_condition %}
+      <tr>
+        <td>{% if r.condition_grade %}<a href="{{ url_for('main.item_list', condition_grade=r.condition_grade) }}">{{ CONDITIONS[r.condition_grade] }}</a>{% else %}Not graded{% endif %}</td>
+        <td class="num">{{ r.item_count }}</td>
+      </tr>
+    {% else %}<tr><td colspan="2" class="muted">No pieces yet.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+</div>
+<p class="muted">Totals only include pieces where a price or value has been entered.</p>
+{% endblock %}

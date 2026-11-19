@@ -1,0 +1,45 @@
+{% macro field_error(errors, name) -%}
+  {% if errors.get(name) %}<span class="error" id="{{ name }}-error">{{ errors[name] }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro text(form, errors, name, label, maxlength, list=None, hint=None, type='text', required=False, extra='') -%}
+  <label for="{{ name }}">{{ label }}{% if required %} <span class="req">*</span>{% endif %}</label>
+  <input type="{{ type }}" id="{{ name }}" name="{{ name }}" value="{{ form.get(name, '') }}"
+         {% if maxlength %}maxlength="{{ maxlength }}"{% endif %}
+         {% if list %}list="{{ list }}"{% endif %}
+         {% if required %}required{% endif %}
+         {% if errors.get(name) %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %} {{ extra }}>
+  {% if hint %}<span class="hint">{{ hint }}</span>{% endif %}
+  {{ field_error(errors, name) }}
+{%- endmacro %}
+
+{% macro select(form, errors, name, label, choices, blank='—', required=False) -%}
+  <label for="{{ name }}">{{ label }}{% if required %} <span class="req">*</span>{% endif %}</label>
+  <select id="{{ name }}" name="{{ name }}" {% if required %}required{% endif %}>
+    <option value="">{{ blank }}</option>
+    {% for value, text in choices.items() %}
+      <option value="{{ value }}" {% if form.get(name) == value %}selected{% endif %}>{{ text }}</option>
+    {% endfor %}
+  </select>
+  {{ field_error(errors, name) }}
+{%- endmacro %}
+
+{% macro checkbox(form, name, label) -%}
+  <label class="check"><input type="checkbox" name="{{ name }}" value="1" {% if form.get(name) in ('1', 'on') %}checked{% endif %}> {{ label }}</label>
+{%- endmacro %}
+
+{% macro datalist(id, values) -%}
+  <datalist id="{{ id }}">{% for v in values %}<option value="{{ v }}">{% endfor %}</datalist>
+{%- endmacro %}
+
+{% macro condition_badge(grade) -%}
+  {% if grade %}<span class="badge cond-{{ grade }}">{{ CONDITIONS[grade] }}</span>{% else %}<span class="muted">Not graded</span>{% endif %}
+{%- endmacro %}
+
+{% macro storage_text(item) -%}
+  {% set parts = [] %}
+  {% if item.storage_location %}{% set _ = parts.append(item.storage_location) %}{% endif %}
+  {% if item.storage_tub %}{% set _ = parts.append('Tub ' ~ item.storage_tub) %}{% endif %}
+  {% if item.storage_tray %}{% set _ = parts.append('Tray ' ~ item.storage_tray) %}{% endif %}
+  {% if parts %}{{ parts | join(' › ') }}{% else %}<span class="muted">Not assigned</span>{% endif %}
+{%- endmacro %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Error{% endblock %}
+{% block content %}
+<section class="card narrow">
+  {% if error %}
+    <h1>{{ error.code }} · {{ error.name }}</h1>
+    <p>{{ error.description }}</p>
+  {% else %}
+    <h1>Something went wrong</h1>
+    <p>The error has been logged. Try again, and check the container logs if it keeps happening.</p>
+  {% endif %}
+  <p><a href="{{ url_for('main.item_list') }}">Back to the collection</a></p>
+</section>
+{% endblock %}

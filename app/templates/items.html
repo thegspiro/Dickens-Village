@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% from "_macros.html" import condition_badge, storage_text, datalist %}
+{% block title %}Collection{% endblock %}
+{% block content %}
+<h1>Collection <span class="muted">({{ total }} piece{{ '' if total == 1 else 's' }})</span></h1>
+
+<form method="get" action="{{ url_for('main.item_list') }}" class="filters card">
+  <div class="grid">
+    <div class="wide">
+      <label for="q">Search</label>
+      <input id="q" name="q" value="{{ filters.q or '' }}" maxlength="100" placeholder="Name, item number or series">
+    </div>
+    <div>
+      <label for="category">Category</label>
+      <select id="category" name="category">
+        <option value="">All</option>
+        {% for v, t in CATEGORIES.items() %}<option value="{{ v }}" {% if filters.category == v %}selected{% endif %}>{{ t }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="condition_grade">Condition</label>
+      <select id="condition_grade" name="condition_grade">
+        <option value="">Any</option>
+        {% for v, t in CONDITIONS.items() %}<option value="{{ v }}" {% if filters.condition_grade == v %}selected{% endif %}>{{ t }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="storage_location">Location</label>
+      <input id="storage_location" name="storage_location" list="dl-location" value="{{ filters.storage_location or '' }}" maxlength="120">
+    </div>
+    <div>
+      <label for="storage_tub">Tub</label>
+      <input id="storage_tub" name="storage_tub" list="dl-tub" value="{{ filters.storage_tub or '' }}" maxlength="60">
+    </div>
+    <div>
+      <label for="storage_tray">Tray</label>
+      <input id="storage_tray" name="storage_tray" list="dl-tray" value="{{ filters.storage_tray or '' }}" maxlength="60">
+    </div>
+    <div>
+      <label for="has_extras">Extras</label>
+      <select id="has_extras" name="has_extras">
+        <option value="">Any</option>
+        <option value="yes" {% if filters.has_extras == 'yes' %}selected{% endif %}>Has extras</option>
+        <option value="no" {% if filters.has_extras == 'no' %}selected{% endif %}>No extras</option>
+      </select>
+    </div>
+    <div>
+      <label for="on_display">On display</label>
+      <select id="on_display" name="on_display">
+        <option value="">Any</option>
+        <option value="yes" {% if filters.on_display == 'yes' %}selected{% endif %}>Yes</option>
+        <option value="no" {% if filters.on_display == 'no' %}selected{% endif %}>No</option>
+      </select>
+    </div>
+    <div>
+      <label for="sort">Sort by</label>
+      <select id="sort" name="sort">
+        {% for v, t in sorts.items() %}<option value="{{ v }}" {% if filters.sort == v %}selected{% endif %}>{{ t }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+  {% if filters.exact_storage %}<input type="hidden" name="exact_storage" value="yes">{% endif %}
+  {% if filters.unstored %}<input type="hidden" name="unstored" value="yes"><p class="muted">Showing only pieces with no storage assigned.</p>{% endif %}
+  <button type="submit">Filter</button>
+  <a href="{{ url_for('main.item_list') }}">Clear</a>
+  {{ datalist('dl-location', suggestions.storage_location) }}
+  {{ datalist('dl-tub', suggestions.storage_tub) }}
+  {{ datalist('dl-tray', suggestions.storage_tray) }}
+</form>
+
+{% if items %}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Name</th><th>Category</th><th>Item #</th><th>Condition</th><th>Storage</th><th>Extras</th><th class="num">Est. value</th></tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td><a href="{{ url_for('main.item_detail', item_id=item.id) }}">{{ item.name }}</a>{% if item.on_display %} <span class="badge">On display</span>{% endif %}</td>
+      <td>{{ CATEGORIES[item.category] }}</td>
+      <td>{{ item.item_number or '' }}</td>
+      <td>{{ condition_badge(item.condition_grade) }}</td>
+      <td>{{ storage_text(item) }}</td>
+      <td>{{ item.extras_count or '' }}</td>
+      <td class="num">{{ item.estimated_value | money }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Pages">
+  {% if filters.page > 1 %}<a href="{{ page_url(filters.page - 1) }}">‹ Previous</a>{% endif %}
+  <span>Page {{ filters.page }} of {{ pages }}</span>
+  {% if filters.page < pages %}<a href="{{ page_url(filters.page + 1) }}">Next ›</a>{% endif %}
+</nav>
+{% endif %}
+{% else %}
+<p class="card">No pieces match. <a href="{{ url_for('main.item_new') }}">Add a piece</a>.</p>
+{% endif %}
+{% endblock %}
