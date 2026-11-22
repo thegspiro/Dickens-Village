@@ -55,8 +55,13 @@
   {% endif %}
   <form method="post" action="{{ url_for('main.catalog_photo_add', catalog_id=entry.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="photo">Add photos (JPEG, PNG or WebP, up to {{ max_photos }} at a time)</label>
-    <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" multiple required>
+    <p class="label">Add photos (JPEG, PNG or WebP, up to {{ max_photos }} at a time)</p>
+    <div class="photo-pickers">
+      <label class="button" for="photo-camera">Take a photo</label>
+      <input id="photo-camera" class="visually-hidden-file" type="file" name="photo" accept="image/jpeg,image/png,image/webp" capture="environment">
+      <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" multiple aria-label="Choose photos">
+      <span class="hint picker-status" aria-live="polite"></span>
+    </div>
     <button type="submit">Upload</button>
   </form>
 </section>

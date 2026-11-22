@@ -13,17 +13,17 @@
 {% elif query %}
   {% if results %}
   <div class="table-wrap">
-  <table>
-    <thead><tr><th>Photo</th><th>Item #</th><th>Name</th><th>List</th><th>Years</th><th class="num">Original retail</th></tr></thead>
+  <table class="responsive">
+    <thead><tr><th>Photo</th><th>Name</th><th>Item #</th><th>List</th><th>Years</th><th class="num">Original retail</th></tr></thead>
     <tbody>
     {% for r in results %}
       <tr>
         <td class="thumb-cell">{% if r.photo_id %}<img class="thumb" src="{{ url_for('main.catalog_photo_thumb', photo_id=r.photo_id) }}" alt="" loading="lazy">{% endif %}</td>
-        <td>{{ r.item_number or '—' }}</td>
-        <td><a href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}">{{ r.name }}</a>{% if r.parent_name %} <span class="muted">(part of “{{ r.parent_name }}”)</span>{% endif %}</td>
-        <td>{{ 'Lighted' if r.list_name == 'lighted' else 'Accessories' }}</td>
-        <td>{{ r.year_issued or '?' }}–{{ 'Current' if r.is_current else (r.year_retired or '?') }}</td>
-        <td class="num">{{ r.srp_usd | money or '—' }}</td>
+        <td class="primary"><a href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}">{{ r.name }}</a>{% if r.parent_name %} <span class="muted">(part of “{{ r.parent_name }}”)</span>{% endif %}</td>
+        <td data-label="Item #">{{ r.item_number or '—' }}</td>
+        <td data-label="List">{{ 'Lighted' if r.list_name == 'lighted' else 'Accessories' }}</td>
+        <td data-label="Years">{{ r.year_issued or '?' }}–{{ 'Current' if r.is_current else (r.year_retired or '?') }}</td>
+        <td data-label="Original retail" class="num">{{ r.srp_usd | money or '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>

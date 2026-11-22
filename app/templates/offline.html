@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#7a1f2b">
+  <title>Offline · Dickens Village Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header"><span class="brand">Dickens Village Tracker</span></header>
+  <main>
+    <section class="card narrow">
+      <h1>You're offline</h1>
+      <p>The tracker can't reach your server right now. Check your Wi-Fi or mobile data, then try again.</p>
+      <p><a class="button" href="/items">Try again</a></p>
+    </section>
+  </main>
+</body>
+</html>
