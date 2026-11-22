@@ -1,0 +1,17 @@
+{
+  "name": "Dickens Village Tracker",
+  "short_name": "Dickens Village",
+  "description": "Track your Dickens' Village buildings, figures and accessories.",
+  "id": "/",
+  "start_url": "/items?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f4ee",
+  "theme_color": "#7a1f2b",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

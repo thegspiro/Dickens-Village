@@ -185,6 +185,37 @@ def logout() -> Any:
     return redirect(url_for("main.login"))
 
 
+# -- installable app (PWA) ----------------------------------------------------
+# These are public: the manifest, service worker and offline page hold no
+# collection data, and browsers fetch the manifest without cookies.
+
+
+@bp.get("/manifest.webmanifest")
+def manifest() -> Any:
+    response = send_from_directory(current_app.static_folder, "manifest.webmanifest",
+                                   mimetype="application/manifest+json", max_age=3600)
+    return response
+
+
+@bp.get("/sw.js")
+def service_worker() -> Any:
+    response = send_from_directory(current_app.static_folder, "sw.js", mimetype="text/javascript", max_age=0)
+    # Always check for a new version so updates reach installed phones promptly.
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
+
+@bp.get("/offline")
+def offline() -> Any:
+    return render_template("offline.html")
+
+
+@bp.get("/favicon.ico")
+def favicon() -> Any:
+    return send_from_directory(current_app.static_folder, "icons/favicon-32.png", mimetype="image/png", max_age=86400)
+
+
 @bp.get("/healthz")
 def healthz() -> Any:
     try:

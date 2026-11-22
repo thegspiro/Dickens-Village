@@ -50,6 +50,17 @@ APP_GID=100
 ```
 Create the folder and give it to `nobody:users` (`chown 99:100`), then rebuild with `docker compose up -d --build`. MySQL data stays in the `db_data` named volume. You can point it at appdata the same way if you want: edit the `db_data` volume in `docker-compose.yml`.
 
+### Using it on your phone
+
+The tracker is an installable web app (PWA). Open it in your phone's browser over **HTTPS**, then:
+
+- **iPhone (Safari):** Share → *Add to Home Screen*.
+- **Android (Chrome):** menu → *Install app* (or *Add to Home screen*).
+
+It opens full-screen with its own icon. Phones only allow installing, and the service worker only runs, on an `https://` address, so serve it through your reverse proxy (see below). Over plain `http://` the home-screen icon still works, but as a shortcut to the website rather than an installed app.
+
+The pages adapt to small screens: the menu collapses, lists become cards, and photo forms have a **Take a photo** button that opens the camera. If the server can't be reached, the app shows an "offline" page. In this version, viewing or editing your collection still needs a connection.
+
 ### HTTPS and reverse proxies
 
 If you expose the app beyond your home network, put it behind a reverse proxy with HTTPS. Then set `COOKIE_SECURE=true` and `TRUSTED_PROXIES=1`. Login throttling is tracked per worker process, so add rate limiting at the proxy if the app is reachable from the internet.

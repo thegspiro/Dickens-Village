@@ -5,19 +5,19 @@
 <p class="muted">Every location, tub and tray in use, with how many pieces are in each. Click a row to see what's in it.</p>
 {% if rows %}
 <div class="table-wrap">
-<table>
+<table class="responsive">
   <thead><tr><th>Location</th><th>Tub</th><th>Tray</th><th class="num">Pieces</th></tr></thead>
   <tbody>
   {% for r in rows %}
     <tr>
       {% if not r.storage_location and not r.storage_tub and not r.storage_tray %}
-        <td colspan="3"><a href="{{ r.href }}">Not assigned to storage</a></td>
+        <td colspan="3" class="primary"><a href="{{ r.href }}">Not assigned to storage</a></td>
       {% else %}
-        <td><a href="{{ r.href }}">{{ r.storage_location or '—' }}</a></td>
-        <td>{{ r.storage_tub or '—' }}</td>
-        <td>{{ r.storage_tray or '—' }}</td>
+        <td data-label="Location"><a href="{{ r.href }}">{{ r.storage_location or '—' }}</a></td>
+        <td data-label="Tub">{{ r.storage_tub or '—' }}</td>
+        <td data-label="Tray">{{ r.storage_tray or '—' }}</td>
       {% endif %}
-      <td class="num">{{ r.item_count }}</td>
+      <td data-label="Pieces" class="num">{{ r.item_count }}</td>
     </tr>
   {% endfor %}
   </tbody>
