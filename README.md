@@ -10,6 +10,7 @@ A self-hosted tracker for a Department 56 Dickens' Village collection: buildings
 - **Extras:** any number per piece (light cord, bulb, sign…), each with its own quantity, condition and notes. The collection list can filter on "has extras."
 - **Links** between a building and the figures and accessories that go with it.
 - **Photos:** upload several at once, for your own pieces and as reference photos on catalog entries. Uploads are re-encoded to JPEG with their metadata (including GPS location) removed, and a small thumbnail is saved alongside. Catalog photos show in the lookup and on every piece linked to that entry.
+- **Measurements:** height, width and depth of each piece and of its box, in inches. Decimals or fractions both work (7.25, 7 1/4, 7¼), and eighths and sixteenths are kept exactly.
 - **Purchase and value:** date, price paid, where you bought it, estimated value. The **Summary** page shows the totals.
 - **Catalog lookup:** the Add-a-piece form has a lookup box. Type an item number (`56.65005`, `65005` or `5665005` all work) or part of a name, then pick the piece. Name, item number, category, series and years fill in, and the piece is linked to its catalog entry so its page shows the original retail price. Pieces that share a number are listed separately, each with its name and which list it came from.
 - Search, filters, sorting and paging on the collection list.

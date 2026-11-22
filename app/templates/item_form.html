@@ -67,6 +67,21 @@
   </fieldset>
 
   <fieldset>
+    <legend>Measurements (inches)</legend>
+    <p class="hint">Decimals or fractions both work, e.g. 7.25 or 7 1/4. Leave blank if you haven't measured.</p>
+    <div class="grid">
+      <div>{{ text(form, errors, 'height_in', 'Height', 20, extra='inputmode="decimal"') }}</div>
+      <div>{{ text(form, errors, 'width_in', 'Width', 20, extra='inputmode="decimal"') }}</div>
+      <div>{{ text(form, errors, 'depth_in', 'Depth', 20, extra='inputmode="decimal"') }}</div>
+    </div>
+    <div class="grid">
+      <div>{{ text(form, errors, 'box_height_in', 'Box height', 20, extra='inputmode="decimal"') }}</div>
+      <div>{{ text(form, errors, 'box_width_in', 'Box width', 20, extra='inputmode="decimal"') }}</div>
+      <div>{{ text(form, errors, 'box_depth_in', 'Box depth', 20, extra='inputmode="decimal"') }}</div>
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend>Purchase and value</legend>
     <div class="grid">
       <div>{{ text(form, errors, 'purchase_date', 'Purchase date', None, type='date') }}</div>

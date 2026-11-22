@@ -9,7 +9,7 @@ MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"
 
 def test_discover_real_migrations_have_rollbacks():
     found = migrate.discover(MIGRATIONS)
-    assert [m.version for m in found] == ["0001_initial", "0002_catalog", "0003_catalog_photos"]
+    assert [m.version for m in found] == ["0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements"]
     assert all(m.down_path is not None for m in found)
 
 

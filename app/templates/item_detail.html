@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import condition_badge, storage_text, text, select, field_error %}
+{% from "_macros.html" import condition_badge, storage_text, text, select, field_error, dims %}
 {% block title %}{{ item.name }}{% endblock %}
 {% block content %}
 <div class="title-row">
@@ -29,6 +29,12 @@
       <dt>Condition</dt><dd>{{ condition_badge(item.condition_grade) }}{% if item.condition_checked_on %} <span class="muted">checked {{ item.condition_checked_on | nicedate }}</span>{% endif %}</dd>
       {% if item.condition_notes %}<dt>Condition notes</dt><dd class="pre">{{ item.condition_notes }}</dd>{% endif %}
       <dt>Box / sleeve</dt><dd>{{ 'Original box' if item.has_original_box else 'No box' }} · {{ 'Sleeve' if item.has_sleeve else 'No sleeve' }}</dd>
+      {% if item.height_in or item.width_in or item.depth_in %}
+      <dt>Size</dt><dd>{{ dims(item.height_in, item.width_in, item.depth_in) }}</dd>
+      {% endif %}
+      {% if item.box_height_in or item.box_width_in or item.box_depth_in %}
+      <dt>Box size</dt><dd>{{ dims(item.box_height_in, item.box_width_in, item.box_depth_in) }}</dd>
+      {% endif %}
       <dt>Storage</dt><dd>{{ storage_text(item) }}{% if item.on_display %} <span class="badge">On display</span>{% endif %}</dd>
       <dt>Purchased</dt><dd>{{ item.purchase_date | nicedate or '—' }}{% if item.purchased_from %} from {{ item.purchased_from }}{% endif %}</dd>
       <dt>Price paid</dt><dd>{{ item.price_paid | money or '—' }}</dd>
