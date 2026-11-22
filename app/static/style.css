@@ -17,6 +17,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; line-height: 1.45; }
 a { color: var(--accent); }
 h1 { font-size: 1.6rem; margin: 0 0 1rem; }
@@ -108,3 +109,20 @@ th { font-size: .85rem; color: var(--muted); font-weight: 600; }
 .stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: .9rem 1rem; }
 .stat-value { display: block; font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .stat-label { color: var(--muted); font-size: .85rem; }
+
+.catalog-lookup { background: #fbf8f2; border: 1px solid var(--line); border-radius: var(--radius); padding: .5rem .9rem .75rem; margin-bottom: 1rem; }
+.catalog-lookup label { margin-top: .25rem; }
+.combo { position: relative; }
+.combo-results {
+  position: absolute; z-index: 10; left: 0; right: 0; top: 100%; margin: 2px 0 0; padding: 0;
+  list-style: none; background: #fff; border: 1px solid #c9c1b5; border-radius: 6px;
+  max-height: 22rem; overflow-y: auto; box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+}
+.combo-results li { padding: .45rem .6rem; cursor: pointer; border-bottom: 1px solid var(--line); }
+.combo-results li:last-child { border-bottom: none; }
+.combo-results li[aria-selected="true"], .combo-results li:hover { background: #f3e7e9; }
+.combo-title { display: block; font-variant-numeric: tabular-nums; }
+.combo-detail { display: block; color: var(--muted); font-size: .82rem; }
+.catalog-linked { display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: center; margin: 0 0 1rem; padding: .45rem .7rem; background: var(--ok-bg); color: var(--ok-ink); border-radius: 6px; }
+.catalog-linked label.check { margin: 0; }
+.combo-number { font-weight: 600; color: var(--accent); }

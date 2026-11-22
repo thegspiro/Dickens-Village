@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Collection{% endblock %} · Dickens Village Tracker</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% block scripts %}{% endblock %}
 </head>
 <body>
   <header class="site-header">

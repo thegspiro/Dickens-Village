@@ -83,5 +83,6 @@ def test_throttle_window_expires():
 
 def test_security_headers(client):
     resp = client.get("/login")
-    assert "script-src 'none'" in resp.headers["Content-Security-Policy"]
+    csp = resp.headers["Content-Security-Policy"]
+    assert "script-src 'self'" in csp and "unsafe-inline" not in csp
     assert resp.headers["X-Frame-Options"] == "DENY"

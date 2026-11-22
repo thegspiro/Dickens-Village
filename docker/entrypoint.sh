@@ -22,6 +22,9 @@ fi
 echo "Applying database migrations..."
 python -m app.migrate up
 
+echo "Loading reference catalog..."
+python -m app.catalog sync
+
 echo "Starting web server on port 8000 with $GUNICORN_WORKERS worker(s)"
 exec gunicorn \
   --bind 0.0.0.0:8000 \

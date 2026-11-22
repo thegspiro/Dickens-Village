@@ -90,7 +90,7 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
     def _security_headers(response: Any) -> Any:
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'none'; "
+            "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; "
             "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")

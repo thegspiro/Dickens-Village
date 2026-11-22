@@ -32,6 +32,7 @@ ARG APP_UID=1000
 ARG APP_GID=1000
 COPY app ./app
 COPY migrations ./migrations
+COPY data ./data
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 ENV UPLOAD_DIR=/data/uploads
 USER ${APP_UID}:${APP_GID}

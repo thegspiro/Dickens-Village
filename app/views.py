@@ -15,6 +15,7 @@ from flask import (
     current_app,
     flash,
     g,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -83,6 +84,38 @@ def _row_to_form(row: dict[str, Any]) -> dict[str, str]:
         else:
             form[key] = str(value)
     return form
+
+
+def _check_catalog_link(data: dict[str, Any], errors: dict[str, str]) -> dict[str, Any] | None:
+    """Return the linked catalog entry, or record an error if the link points nowhere."""
+    if data.get("catalog_id") is None:
+        return None
+    entry = repo().get_catalog_item(data["catalog_id"])
+    if entry is None:
+        errors["catalog_id"] = "That catalog entry no longer exists; pick the piece again."
+        data["catalog_id"] = None
+    return entry
+
+
+def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
+    def money(value: Any) -> str | None:
+        return None if value is None else f"{Decimal(value):.2f}"
+
+    return {
+        "id": row["id"],
+        "list": row["list_name"],
+        "item_number": row["item_number"],
+        "name": row["name"],
+        "details": row["details"],
+        "series": row["series"],
+        "year_issued": row["year_issued"],
+        "year_retired": row["year_retired"],
+        "is_current": bool(row["is_current"]),
+        "srp_usd": money(row["srp_usd"]),
+        "srp_cad": money(row["srp_cad"]),
+        "category": row["default_category"],
+        "parent_name": row["parent_name"],
+    }
 
 
 def _storage_suggestions() -> dict[str, list[str]]:
@@ -177,20 +210,22 @@ def item_new() -> Any:
     if request.method == "POST":
         check_csrf()
         data, errors = parse_item_form(request.form)
+        catalog = _check_catalog_link(data, errors)
         if not errors:
             item_id = repo().create_item(data)
             flash(f"Added “{data['name']}”.", "success")
             return redirect(url_for("main.item_detail", item_id=item_id))
         return (
             render_template(
-                "item_form.html", form=request.form, errors=errors, item=None,
+                "item_form.html", form=request.form, errors=errors, item=None, catalog=catalog,
                 suggestions=_storage_suggestions(),
             ),
             400,
         )
     preset = {"category": request.args.get("category", "")}
     return render_template(
-        "item_form.html", form=preset, errors={}, item=None, suggestions=_storage_suggestions()
+        "item_form.html", form=preset, errors={}, item=None, catalog=None,
+        suggestions=_storage_suggestions(),
     )
 
 
@@ -206,6 +241,7 @@ def item_detail(item_id: int) -> Any:
         links=r.list_links(item_id),
         link_candidates=r.link_candidates(item),
         photos=r.list_photos(item_id),
+        catalog=r.get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None,
         extra_form={},
         extra_errors={},
     )
@@ -218,6 +254,7 @@ def item_edit(item_id: int) -> Any:
     if request.method == "POST":
         check_csrf()
         data, errors = parse_item_form(request.form)
+        catalog = _check_catalog_link(data, errors)
         if not errors:
             if not repo().update_item(item_id, data):
                 abort(404)
@@ -225,13 +262,14 @@ def item_edit(item_id: int) -> Any:
             return redirect(url_for("main.item_detail", item_id=item_id))
         return (
             render_template(
-                "item_form.html", form=request.form, errors=errors, item=item,
+                "item_form.html", form=request.form, errors=errors, item=item, catalog=catalog,
                 suggestions=_storage_suggestions(),
             ),
             400,
         )
+    catalog = repo().get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None
     return render_template(
-        "item_form.html", form=_row_to_form(item), errors={}, item=item,
+        "item_form.html", form=_row_to_form(item), errors={}, item=item, catalog=catalog,
         suggestions=_storage_suggestions(),
     )
 
@@ -272,6 +310,7 @@ def extra_add(item_id: int) -> Any:
                 links=r.list_links(item_id),
                 link_candidates=r.link_candidates(item),
                 photos=r.list_photos(item_id),
+                catalog=r.get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None,
                 extra_form=request.form,
                 extra_errors=errors,
             ),
@@ -394,6 +433,19 @@ def photo_delete(photo_id: int) -> Any:
     photos.delete_photo_file(_upload_dir(), photo["filename"])
     flash("Photo removed.", "success")
     return redirect(url_for("main.item_detail", item_id=photo["item_id"]) + "#photos")
+
+
+# -- reference catalog -------------------------------------------------------
+
+
+@bp.get("/catalog/search")
+@login_required
+def catalog_search() -> Any:
+    query = request.args.get("q", "")
+    results = repo().search_catalog(query) if len(query.strip()) >= 2 else []
+    response = jsonify({"results": [_catalog_json(row) for row in results]})
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 # -- summaries ---------------------------------------------------------------

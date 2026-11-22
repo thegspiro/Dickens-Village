@@ -17,7 +17,7 @@ import pytest
 
 pymysql = pytest.importorskip("pymysql")
 
-from app import migrate  # noqa: E402
+from app import catalog, migrate  # noqa: E402
 from app.config import DatabaseConfig  # noqa: E402
 from app.db import connect  # noqa: E402
 from app.repository import PAGE_SIZE, MySQLRepository  # noqa: E402
@@ -26,7 +26,8 @@ from app.validation import parse_extra_form, parse_item_form, parse_list_filters
 pytestmark = pytest.mark.integration
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
-TABLES = ("item_photos", "item_links", "item_extras", "items")
+TABLES = ("item_photos", "item_links", "item_extras", "items", "catalog_items")
+CATALOG_DIR = Path(__file__).resolve().parents[2] / "data" / "catalog"
 
 
 def _db_config() -> DatabaseConfig:
@@ -98,11 +99,21 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0002_catalog"
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM items LIKE 'catalog_id'")
+            assert cur.fetchone() is None
+            cur.execute("SHOW TABLES LIKE 'catalog_items'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0001_initial"
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'items'")
             assert cur.fetchone() is None
-        assert migrate.migrate_up(conn, migrations) == ["0001_initial"]
+        assert migrate.migrate_up(conn, migrations) == ["0001_initial", "0002_catalog"]
+        # The guarded ALTERs in 0002 must be harmless when run a second time.
+        for m in migrations:
+            migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
+        conn.commit()
     finally:
         conn.close()
 
@@ -231,3 +242,72 @@ def test_collection_summary(repo):
     assert int(s["totals"]["on_display"]) == 1
     assert {r["category"] for r in s["by_category"]} == {"building", "figure"}
     assert repo.ping()
+
+
+# -- catalog ------------------------------------------------------------------------
+
+
+def test_catalog_sync_is_idempotent_and_updates(db_config, repo):
+    rows = catalog.load_directory(CATALOG_DIR)
+    conn = connect(db_config)
+    try:
+        assert catalog.sync(conn, rows) == 760
+        assert catalog.sync(conn, rows) == 760
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM catalog_items")
+            assert cur.fetchone()["n"] == 760
+        changed = [catalog.CatalogRow({**r.values, "name": "Renamed"}) if r.values["source_key"] == "lighted-2025-0002"
+                   else r for r in rows]
+        catalog.sync(conn, changed)
+        with conn.cursor() as cur:
+            cur.execute("SELECT name FROM catalog_items WHERE source_key = 'lighted-2025-0002'")
+            assert cur.fetchone()["name"] == "Renamed"
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_catalog_search_ranks_item_numbers(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    names = [r["name"] for r in repo.search_catalog("56.65005")]
+    assert names[0] == "Christmas Carol Cottage"  # the set itself before its pieces
+    assert set(names) == {"Christmas Carol Cottage", "Fezziwig's Warehouse",
+                          "Scrooge & Marley Counting House", "The Cottage Of Bob Cratchit & Tiny Tim"}
+    for query in ("65005", "5665005", "56-65005"):
+        assert "Fezziwig's Warehouse" in [r["name"] for r in repo.search_catalog(query)], query
+    piece = next(r for r in repo.search_catalog("65005") if r["name"] == "Fezziwig's Warehouse")
+    assert piece["parent_name"] == "Christmas Carol Cottage" and piece["srp_usd"] == Decimal("25.00")
+    assert {r["name"] for r in repo.search_catalog("58576")} == {"Christmas Morning Parade", "London Gas Worker"}
+    assert repo.search_catalog("prize turkey")[0]["item_number"] == "56.58539"
+    assert repo.search_catalog("%%") == []  # LIKE wildcards are matched literally
+    assert repo.search_catalog("x") == []
+    assert repo.get_catalog_item(piece["id"])["name"] == "Fezziwig's Warehouse"
+
+
+def test_item_catalog_link_and_on_delete_set_null(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    entry = repo.search_catalog("56.65161")[0]
+    data = item(name="Dickens' Village Church")
+    data["catalog_id"] = entry["id"]
+    item_id = repo.create_item(data)
+    assert repo.get_item(item_id)["catalog_id"] == entry["id"]
+    bad = item()
+    bad["catalog_id"] = 99_999_999
+    with pytest.raises(pymysql.err.IntegrityError):
+        repo.create_item(bad)
+    conn = connect(db_config)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM catalog_items WHERE id = %s", (entry["id"],))
+        conn.commit()
+    finally:
+        conn.close()
+    assert repo.get_item(item_id)["catalog_id"] is None
