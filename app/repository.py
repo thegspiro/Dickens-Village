@@ -32,6 +32,13 @@ _EXTRAS_COUNT = (
 )
 
 
+_CATALOG_FIELDS = (
+    "c.id, c.list_name, c.item_number, c.name, c.details, c.series, c.year_issued, "
+    "c.year_retired, c.is_current, c.srp_usd, c.srp_cad, c.default_category, "
+    "p.name AS parent_name, p.item_number AS parent_item_number"
+)
+
+
 def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -319,6 +326,48 @@ class MySQLRepository:
             if row is None:
                 return None
             cur.execute("DELETE FROM item_photos WHERE id = %s", (photo_id,))
+        return row
+
+    # -- reference catalog ----------------------------------------------------
+
+    def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
+        """Find catalog entries by item number (ranked first) or name."""
+        query = " ".join(query.split())[:100]
+        if len(query) < 2:
+            return []
+        like = f"%{_like_escape(query)}%"
+        prefix = f"{_like_escape(query)}%"
+        digits = "".join(ch for ch in query if ch.isdigit())
+        where = ["c.item_number LIKE %s", "c.name LIKE %s"]
+        params: list[Any] = [like, like]
+        if len(digits) >= 2:
+            # "5665005" or "56-65005" should still find 56.65005
+            where.append("REPLACE(c.item_number, '.', '') LIKE %s")
+            params.append(f"%{digits}%")
+        sql = (
+            f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
+            "LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
+            f"WHERE {' OR '.join(where)} "
+            "ORDER BY CASE "
+            "  WHEN c.item_number = %s THEN 0 "
+            "  WHEN c.item_number LIKE %s THEN 1 "
+            "  WHEN c.item_number LIKE %s THEN 2 "
+            "  WHEN c.name LIKE %s THEN 3 "
+            "  ELSE 4 END, "
+            "c.parent_key IS NOT NULL, c.item_number, c.source_key "
+            "LIMIT %s"
+        )
+        rows = self._all(sql, [*params, query, prefix, like, prefix, limit])
+        self._end_read()
+        return rows
+
+    def get_catalog_item(self, catalog_id: int) -> dict[str, Any] | None:
+        row = self._one(
+            f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
+            "LEFT JOIN catalog_items p ON p.source_key = c.parent_key WHERE c.id = %s",
+            (catalog_id,),
+        )
+        self._end_read()
         return row
 
     # -- summaries ------------------------------------------------------------

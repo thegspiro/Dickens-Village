@@ -15,6 +15,15 @@
     <h2>Details</h2>
     <dl class="details">
       <dt>Item number</dt><dd>{{ item.item_number or '—' }}</dd>
+      {% if catalog %}
+      <dt>Catalog listing</dt>
+      <dd>
+        {{ catalog.item_number or 'No number' }} · {{ catalog.name }}{% if catalog.parent_name %} <span class="muted">(part of “{{ catalog.parent_name }}”)</span>{% endif %}<br>
+        <span class="muted">{{ 'Lighted' if catalog.list_name == 'lighted' else 'Accessories' }} list · {{ catalog.year_issued or '?' }}–{{ 'Current' if catalog.is_current else (catalog.year_retired or '?') }}</span>
+        {% if catalog.details %}<br><span class="muted">{{ catalog.details }}</span>{% endif %}
+      </dd>
+      <dt>Original retail</dt><dd>{{ (catalog.srp_usd | money ~ ' US') if catalog.srp_usd is not none else '—' }}{% if catalog.srp_cad is not none %} · {{ catalog.srp_cad | money }} CAD{% endif %}</dd>
+      {% endif %}
       <dt>Series</dt><dd>{{ item.series or '—' }}</dd>
       <dt>Introduced / retired</dt><dd>{{ item.year_introduced or '?' }} – {{ item.year_retired or ('?' if item.year_introduced else '') }}</dd>
       <dt>Condition</dt><dd>{{ condition_badge(item.condition_grade) }}{% if item.condition_checked_on %} <span class="muted">checked {{ item.condition_checked_on | nicedate }}</span>{% endif %}</dd>

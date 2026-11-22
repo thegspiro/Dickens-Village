@@ -9,7 +9,7 @@ MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"
 
 def test_discover_real_migrations_have_rollbacks():
     found = migrate.discover(MIGRATIONS)
-    assert [m.version for m in found] == ["0001_initial"]
+    assert [m.version for m in found] == ["0001_initial", "0002_catalog"]
     assert all(m.down_path is not None for m in found)
 
 
@@ -24,6 +24,17 @@ def test_initial_migration_is_idempotent_sql():
         "DROP TABLE IF EXISTS item_extras",
         "DROP TABLE IF EXISTS items",
     ]
+
+
+def test_catalog_migration_statements():
+    up = migrate.split_statements((MIGRATIONS / "0002_catalog.up.sql").read_text())
+    assert up[0].startswith("CREATE TABLE IF NOT EXISTS catalog_items")
+    # each guarded ALTER is SET / PREPARE / EXECUTE / DEALLOCATE
+    assert sum(s.startswith("PREPARE") for s in up) == 2
+    assert all("ADD COLUMN" not in s or s.startswith("SET @dv_sql") for s in up)
+    down = migrate.split_statements((MIGRATIONS / "0002_catalog.down.sql").read_text())
+    assert down[-1] == "DROP TABLE IF EXISTS catalog_items"
+    assert not any(s.startswith("DROP TABLE IF EXISTS items") for s in down)
 
 
 def test_split_requires_terminator():

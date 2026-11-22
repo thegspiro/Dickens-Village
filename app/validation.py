@@ -49,6 +49,7 @@ ITEM_COLUMNS = (
     "condition_grade",
     "condition_checked_on",
     *ITEM_BOOL_FIELDS,
+    "catalog_id",
 )
 
 STORAGE_COLUMNS = ("storage_location", "storage_tub", "storage_tray")
@@ -166,6 +167,13 @@ def parse_item_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, 
     data["condition_grade"] = _choice(form, "condition_grade", CONDITIONS, errors, required=False)
     for key in ITEM_BOOL_FIELDS:
         data[key] = _bool(form, key)
+
+    data["catalog_id"] = None
+    raw_catalog = form.get("catalog_id", "").strip()
+    if raw_catalog and form.get("catalog_unlink", "") not in {"1", "on"}:
+        data["catalog_id"] = parse_positive_int(raw_catalog)
+        if data["catalog_id"] is None:
+            errors["catalog_id"] = "The catalog link is not valid; pick the piece again."
     return data, errors
 
 

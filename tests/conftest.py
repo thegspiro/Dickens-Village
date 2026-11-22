@@ -28,6 +28,7 @@ class FakeRepository:
         self.extras: dict[int, dict[str, Any]] = {}
         self.links: set[tuple[int, int]] = set()
         self.photos: dict[int, dict[str, Any]] = {}
+        self.catalog: dict[int, dict[str, Any]] = {}
         self._ids = itertools.count(1)
         self.closed = 0
 
@@ -163,6 +164,34 @@ class FakeRepository:
 
     def delete_photo(self, photo_id: int) -> dict[str, Any] | None:
         return self.photos.pop(photo_id, None)
+
+    def add_catalog(self, **fields: Any) -> int:
+        new_id = next(self._ids)
+        row = {
+            "id": new_id, "list_name": "lighted", "item_number": None, "name": "", "details": None,
+            "series": None, "year_issued": None, "year_retired": None, "is_current": 0,
+            "srp_usd": None, "srp_cad": None, "default_category": None,
+            "parent_name": None, "parent_item_number": None,
+        }
+        row.update(fields)
+        self.catalog[new_id] = row
+        return new_id
+
+    def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
+        q = query.strip().lower()
+        if len(q) < 2:
+            return []
+        digits = "".join(ch for ch in q if ch.isdigit())
+        hits = []
+        for row in self.catalog.values():
+            number = (row["item_number"] or "").lower()
+            if q in number or q in row["name"].lower() or (len(digits) >= 2 and digits in number.replace(".", "")):
+                rank = 0 if number == q else 1 if number.startswith(q) else 2 if q in number else 3
+                hits.append((rank, number, row["id"], row))
+        return [h[3] for h in sorted(hits, key=lambda h: h[:3])][:limit]
+
+    def get_catalog_item(self, catalog_id: int) -> dict[str, Any] | None:
+        return self.catalog.get(catalog_id)
 
     def storage_summary(self) -> list[dict[str, Any]]:
         counts: dict[tuple, int] = {}

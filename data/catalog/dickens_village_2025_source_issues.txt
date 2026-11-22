@@ -1,0 +1,15 @@
+(no number) Seton Morris Spice Merchant: listed without an item number
+4050930 The Duke's Wheel Cheese Shoppe: year 2917 in the source is impossible; left blank
+4056641 Victorian Milk Maid: year 2917 in the source is impossible; left blank
+Item number 4030359 is used by 2 entries: C.D. Boz Ink & Pen Co.; Thank You, Mr. Dickens
+Item number 4044808 is used by 2 entries: The Sword & The Shield; An Evening Stroll
+Item number 4056639 is used by 2 entries: Olde Bramling Oast House; Home For The Holidays, 2017, Dickens' Village
+Item number 4056646 is used by 2 entries: Eight Milkmaids Crock; Oast House Hop Harvest
+Item number 56.58353 is used by 2 entries: Dudley Docker; The Old Royal Observatory
+Item number 56.58576 is used by 2 entries: Christmas Morning Parade; London Gas Worker
+Item number 56.58723 is used by 2 entries: J. Horsley Christmas Cards; Admiral's House, Queens Port
+Item number 6000587 is used by 2 entries: Isle of Wight Chapel; Isle of Wight Chapel Boxed Set
+Item number 6000588 is used by 2 entries: Tily's Boiled Sweets; Tily's Boiled Sweets Boxed Set
+Item number 6000589 is used by 2 entries: Brookshire Cottage; Brookshire Cottage
+Item number 6007595 is used by 2 entries: Chelsea on the Thames; Preparing For Tomorrow's Catch
+60000599 Victorian Sign Painter: item number has an unusual format

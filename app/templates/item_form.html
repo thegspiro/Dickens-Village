@@ -8,6 +8,25 @@
 <form method="post" class="card">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
+  <section class="catalog-lookup" data-search-url="{{ url_for('main.catalog_search') }}" hidden>
+    <label for="catalog-lookup">Look up in catalog</label>
+    <div class="combo">
+      <input id="catalog-lookup" type="search" role="combobox" aria-autocomplete="list"
+             aria-expanded="false" aria-controls="catalog-results" autocomplete="off" maxlength="100"
+             placeholder="Item number, e.g. 56.65005 or 65005">
+      <ul id="catalog-results" class="combo-results" role="listbox" aria-label="Catalog matches" hidden></ul>
+    </div>
+    <span class="hint">Type an item number (or part of a name) and pick the piece. The fields below fill in, and you can still change them.</span>
+    <p id="catalog-status" class="hint" role="status" aria-live="polite"></p>
+  </section>
+
+  <input type="hidden" id="catalog_id" name="catalog_id" value="{{ form.get('catalog_id', '') }}">
+  <div id="catalog-linked" class="catalog-linked"{% if not catalog %} hidden{% endif %}>
+    <span id="catalog-linked-text">{% if catalog %}Linked to catalog: <strong>{{ catalog.item_number or 'no number' }} · {{ catalog.name }}</strong>{% if catalog.parent_name %} (part of “{{ catalog.parent_name }}”){% endif %}{% endif %}</span>
+    <label class="check"><input type="checkbox" id="catalog_unlink" name="catalog_unlink" value="1"> Remove catalog link</label>
+  </div>
+  {{ field_error(errors, 'catalog_id') }}
+
   <fieldset>
     <legend>Catalog</legend>
     <div class="grid">
@@ -73,3 +92,4 @@
 </form>
 {% if not item %}<p class="muted">You can add extras, photos and links to buildings after saving.</p>{% endif %}
 {% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='catalog-lookup.js') }}" defer></script>{% endblock %}
