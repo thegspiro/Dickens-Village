@@ -211,12 +211,13 @@ def test_whole_request_limit_still_applies(tmp_path, fake_repo):
     env = make_env(tmp_path)
     env["MAX_REQUEST_MB"] = "1"
     env["MAX_UPLOAD_MB"] = "1"
+    env["MAX_SCAN_MB"] = "1"
     application = create_app(load_config(env), repo_factory=lambda _c: fake_repo)
     client = application.test_client()
     with client.session_transaction() as sess:
         sess["user"] = "gabriel"
         sess["csrf"] = "t"
-    resp = client.post("/items/1/photos", data={"photo": (io.BytesIO(b"0" * (2 * 1024 * 1024)), "x.jpg")},
+    resp = client.post("/items/1/photos", data={"photo": (io.BytesIO(b"0" * (3 * 1024 * 1024)), "x.jpg")},
                        content_type="multipart/form-data")
     assert resp.status_code == 413
 

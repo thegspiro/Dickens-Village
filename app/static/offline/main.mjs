@@ -279,6 +279,10 @@ async function pieceView(key) {
             } }, "Remove"));
         })),
       h("div", { class: "photo-pickers" }, h("label", { class: "button", for: "cam" }, "Take a photo"), camInput, fileInput)),
+    (rec.scans || []).length ? h("section", { class: "card" }, h("h2", null, "3D scans"),
+      h("p", null, rec.scans.length + (rec.scans.length === 1 ? " scan" : " scans") + " on the full site. ",
+        navigator.onLine && rec.id ? h("a", { href: "/items/" + Number(rec.id) + "#scans" }, "View in 3D")
+          : h("span", { class: "muted" }, "Scans aren't stored on the phone; view them when you're online."))) : null,
     rec.id && navigator.onLine ? h("p", null, h("a", { href: "/items/" + Number(rec.id) }, "Open on the full site")) : null,
     h("p", null, h("a", { href: "#/" }, "Back to my collection")),
   ];

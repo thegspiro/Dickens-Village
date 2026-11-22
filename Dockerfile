@@ -1,5 +1,12 @@
 # syntax=docker/dockerfile:1
 
+# 3D viewer (model-viewer) and its decoders, fetched from npm at build time so
+# the app serves them itself instead of loading them from a CDN.
+FROM node:22-alpine AS vendor
+WORKDIR /vendor
+COPY scripts/fetch_vendor.sh ./
+RUN sh ./fetch_vendor.sh /vendor/out
+
 FROM python:3.13-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -33,6 +40,7 @@ ARG APP_GID=1000
 COPY app ./app
 COPY migrations ./migrations
 COPY data ./data
+COPY --from=vendor /vendor/out ./app/static/vendor
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 ENV UPLOAD_DIR=/data/uploads
 USER ${APP_UID}:${APP_GID}

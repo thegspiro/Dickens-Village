@@ -26,7 +26,7 @@ from app.validation import parse_extra_form, parse_item_form, parse_list_filters
 pytestmark = pytest.mark.integration
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
-TABLES = ("item_photos", "item_links", "item_extras", "items", "catalog_photos", "catalog_items")
+TABLES = ("item_scans", "item_photos", "item_links", "item_extras", "items", "catalog_photos", "catalog_items")
 CATALOG_DIR = Path(__file__).resolve().parents[2] / "data" / "catalog"
 
 
@@ -99,6 +99,7 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0006_item_scans"
         assert migrate.migrate_down(conn, migrations) == "0005_sync"
         with conn.cursor() as cur:
             cur.execute("SHOW COLUMNS FROM items LIKE 'version'")
@@ -122,7 +123,8 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
             cur.execute("SHOW TABLES LIKE 'items'")
             assert cur.fetchone() is None
         assert migrate.migrate_up(conn, migrations) == [
-            "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync"]
+            "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
+            "0006_item_scans"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -455,3 +457,21 @@ def test_catalog_all_and_etag(db_config, repo):
     tag = repo.catalog_etag()
     repo.add_catalog_photo(rows[0]["id"], "f" * 32 + ".jpg", None)
     assert repo.catalog_etag() != tag
+
+
+def test_scans_add_list_delete_and_cascade(repo):
+    item_id = repo.create_item(item())
+    scan_id = repo.add_scan(item_id, "a" * 32 + ".glb", "mill.glb", 12345)
+    assert repo.add_scan(999_999, "b" * 32 + ".glb", None, 1) is None
+    (row,) = repo.list_scans(item_id)
+    assert row["id"] == scan_id and row["size_bytes"] == 12345 and row["original_name"] == "mill.glb"
+    assert repo.get_scan(scan_id)["item_id"] == item_id
+    tag = repo.snapshot_etag()
+    repo.add_scan(item_id, "c" * 32 + ".gltf", None, 10)
+    assert repo.snapshot_etag() != tag
+    assert {s["item_id"] for s in repo.snapshot()["scans"]} == {item_id}
+    assert repo.delete_scan(scan_id)["filename"] == "a" * 32 + ".glb"
+    assert repo.delete_scan(scan_id) is None
+    # deleting the piece returns its scan files too, so they can be removed from disk
+    assert repo.delete_item(item_id) == ["c" * 32 + ".gltf"]
+    assert repo.list_scans(item_id) == []

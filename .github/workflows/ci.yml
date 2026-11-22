@@ -104,6 +104,11 @@ jobs:
         run: |
           pip install -r requirements-e2e.txt
           python -m playwright install --with-deps chromium
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Fetch the 3D viewer (as the Docker build does)
+        run: sh scripts/fetch_vendor.sh
       - name: Start the app against MySQL (migrations + catalog, as in Docker)
         run: |
           password="$(python -c 'import secrets; print(secrets.token_urlsafe(18))')"

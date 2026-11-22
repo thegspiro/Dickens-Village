@@ -24,7 +24,7 @@ from flask import (
     url_for,
 )
 
-from . import photos
+from . import photos, scans
 from .auth import (
     check_csrf,
     current_user,
@@ -348,6 +348,7 @@ def item_detail(item_id: int) -> Any:
         photos=r.list_photos(item_id),
         catalog=r.get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None,
         catalog_photos=r.list_catalog_photos(item["catalog_id"]) if item.get("catalog_id") else [],
+        scans=_scans_for_page(item_id),
         extra_form={},
         extra_errors={},
     )
@@ -393,7 +394,10 @@ def item_delete(item_id: int) -> Any:
             abort(404)
         # Files are removed only after the database commit succeeded.
         for filename in filenames:
-            photos.delete_photo_file(_upload_dir(), filename)
+            if scans.FILENAME_RE.match(filename):
+                scans.delete_scan_file(_upload_dir(), filename)
+            else:
+                photos.delete_photo_file(_upload_dir(), filename)
         flash(f"Deleted “{item['name']}”.", "success")
         return redirect(url_for("main.item_list"))
     return render_template("item_delete.html", item=item)
@@ -420,6 +424,7 @@ def extra_add(item_id: int) -> Any:
                 photos=r.list_photos(item_id),
                 catalog=r.get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None,
                 catalog_photos=r.list_catalog_photos(item["catalog_id"]) if item.get("catalog_id") else [],
+                scans=_scans_for_page(item_id),
                 extra_form=request.form,
                 extra_errors=errors,
             ),
@@ -587,6 +592,88 @@ def photo_delete(photo_id: int) -> Any:
     photos.delete_photo_file(_upload_dir(), photo["filename"])
     flash("Photo removed.", "success")
     return redirect(url_for("main.item_detail", item_id=photo["item_id"]) + "#photos")
+
+
+# -- 3D scans ----------------------------------------------------------------
+
+
+def _scans_for_page(item_id: int) -> list[dict[str, Any]]:
+    rows = repo().list_scans(item_id)
+    if rows and current_app.config.get("MODEL_VIEWER_AVAILABLE"):
+        g.needs_3d_viewer = True
+    for row in rows:
+        row["size_text"] = scans.human_size(int(row["size_bytes"]))
+    return rows
+
+
+@bp.post("/items/<int:item_id>/scans")
+@login_required
+def scan_add(item_id: int) -> Any:
+    check_csrf()
+    _item_or_404(item_id)
+    uploads = [f for f in request.files.getlist("scan") if f and f.filename]
+    if not uploads:
+        flash("Choose a 3D scan file to upload.", "error")
+        return redirect(url_for("main.item_detail", item_id=item_id) + "#scans")
+    max_bytes = current_app.config["DICKENS"].max_scan_mb * 1024 * 1024
+    added = 0
+    for upload in uploads[:5]:
+        original = photos.clean_original_name(upload.filename)
+        try:
+            filename, size = scans.save_scan(upload.stream, original, _upload_dir(), max_bytes)
+        except scans.ScanError as exc:
+            flash(f"{original or 'A file'}: {exc}", "error")
+            continue
+        try:
+            scan_id = repo().add_scan(item_id, filename, original, size)
+        except Exception:
+            scans.delete_scan_file(_upload_dir(), filename)
+            raise
+        if scan_id is None:
+            scans.delete_scan_file(_upload_dir(), filename)
+            abort(404)
+        added += 1
+    if len(uploads) > 5:
+        flash("Upload at most 5 scans at a time; the rest were skipped.", "error")
+    if added:
+        flash(f"Added {added} 3D scan{'' if added == 1 else 's'}.", "success")
+    return redirect(url_for("main.item_detail", item_id=item_id) + "#scans")
+
+
+def _send_scan(scan_id: int, download: bool) -> Any:
+    scan = repo().get_scan(scan_id)
+    if scan is None or not scans.FILENAME_RE.match(scan["filename"]):
+        abort(404)
+    response = send_from_directory(
+        _upload_dir(), scan["filename"], mimetype=scans.mime_type(scan["filename"]), max_age=3600,
+        as_attachment=download, download_name=scans.download_name(scan["original_name"], scan["filename"]),
+    )
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
+@bp.get("/scans/<int:scan_id>")
+@login_required
+def scan_file(scan_id: int) -> Any:
+    return _send_scan(scan_id, download=False)
+
+
+@bp.get("/scans/<int:scan_id>/download")
+@login_required
+def scan_download(scan_id: int) -> Any:
+    return _send_scan(scan_id, download=True)
+
+
+@bp.post("/scans/<int:scan_id>/delete")
+@login_required
+def scan_delete(scan_id: int) -> Any:
+    check_csrf()
+    scan = repo().delete_scan(scan_id)
+    if scan is None:
+        abort(404)
+    scans.delete_scan_file(_upload_dir(), scan["filename"])
+    flash("3D scan removed.", "success")
+    return redirect(url_for("main.item_detail", item_id=scan["item_id"]) + "#scans")
 
 
 # -- reference catalog -------------------------------------------------------

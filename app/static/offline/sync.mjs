@@ -167,7 +167,7 @@ async function pullSnapshot() {
   if (res.status === 304) return;
   var rows = res.data.items;
   var items = await db.all("items");
-  var merged = m.mergeSnapshot(items, rows, m.ITEM_FIELDS, "", function (row) { return { photos: row.photos }; });
+  var merged = m.mergeSnapshot(items, rows, m.ITEM_FIELDS, "", function (row) { return { photos: row.photos, scans: row.scans || [] }; });
   await db.apply("items", merged.put, merged.remove);
 
   var keyById = {};

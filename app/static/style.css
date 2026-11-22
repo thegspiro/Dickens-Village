@@ -196,3 +196,11 @@ fieldset.conflict { border: 1px solid var(--line); border-radius: 6px; padding: 
 fieldset.conflict label.check { display: flex; margin: .3rem 0; }
 .offline-app .combo-results li { padding: .55rem .6rem; }
 @media (max-width: 720px) { .offline-filters { grid-template-columns: 1fr; } }
+
+/* ---- 3D scans ------------------------------------------------------------- */
+.scan { margin: 0 0 1rem; }
+model-viewer.scan-viewer { display: block; width: 100%; height: 360px; background: #f3efe8; border-radius: var(--radius); border: 1px solid var(--line); }
+.scan-progress { display: none; }
+.scan figcaption { display: flex; flex-wrap: wrap; gap: .25rem .75rem; align-items: baseline; margin-top: .35rem; }
+.scan-status.error { color: var(--err-ink); }
+@media (max-width: 720px) { model-viewer.scan-viewer { height: 300px; } }

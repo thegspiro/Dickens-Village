@@ -30,6 +30,7 @@ class FakeRepository:
         self.photos: dict[int, dict[str, Any]] = {}
         self.catalog: dict[int, dict[str, Any]] = {}
         self.catalog_photos: dict[int, dict[str, Any]] = {}
+        self.scans: dict[int, dict[str, Any]] = {}
         self._ids = itertools.count(1)
         self.closed = 0
 
@@ -111,13 +112,14 @@ class FakeRepository:
         return {"items": [dict(i) for i in self.items.values()],
                 "extras": [dict(e) for e in self.extras.values()],
                 "photos": [{"id": p["id"], "item_id": p["item_id"], "client_uuid": p.get("client_uuid")}
-                           for p in self.photos.values()]}
+                           for p in self.photos.values()],
+                "scans": [{"id": s["id"], "item_id": s["item_id"]} for s in self.scans.values()]}
 
     def snapshot_etag(self) -> str:
         return "/".join(str(x) for x in (
             len(self.items), sum(i["version"] for i in self.items.values()), max(self.items, default=0),
             len(self.extras), sum(e.get("version", 1) for e in self.extras.values()), max(self.extras, default=0),
-            len(self.photos), sum(self.photos)))
+            len(self.photos), sum(self.photos), len(self.scans), sum(self.scans)))
 
     def catalog_all(self) -> list[dict[str, Any]]:
         return [self._catalog_with_photos(r) for r in self.catalog.values()]
@@ -132,7 +134,9 @@ class FakeRepository:
         self.extras = {k: v for k, v in self.extras.items() if v["item_id"] != item_id}
         self.links = {l for l in self.links if item_id not in l}
         names = [p["filename"] for p in self.photos.values() if p["item_id"] == item_id]
+        names += [s["filename"] for s in self.scans.values() if s["item_id"] == item_id]
         self.photos = {k: v for k, v in self.photos.items() if v["item_id"] != item_id}
+        self.scans = {k: v for k, v in self.scans.items() if v["item_id"] != item_id}
         return names
 
     def distinct_values(self, column: str) -> list[str]:
@@ -227,6 +231,23 @@ class FakeRepository:
         self.photos[new_id] = {"id": new_id, "item_id": item_id, "filename": filename,
                                "original_name": original_name, "client_uuid": client_uuid}
         return new_id
+
+    def list_scans(self, item_id: int) -> list[dict[str, Any]]:
+        return [dict(s) for s in self.scans.values() if s["item_id"] == item_id]
+
+    def get_scan(self, scan_id: int) -> dict[str, Any] | None:
+        return self.scans.get(scan_id)
+
+    def add_scan(self, item_id, filename, original_name, size_bytes):
+        if item_id not in self.items:
+            return None
+        new_id = next(self._ids)
+        self.scans[new_id] = {"id": new_id, "item_id": item_id, "filename": filename, "original_name": original_name,
+                              "size_bytes": size_bytes, "created_at": dt.datetime(2026, 11, 22, 9, 0)}
+        return new_id
+
+    def delete_scan(self, scan_id: int) -> dict[str, Any] | None:
+        return self.scans.pop(scan_id, None)
 
     def get_photo_by_client_uuid(self, client_uuid: str) -> dict[str, Any] | None:
         return next((p for p in self.photos.values() if p.get("client_uuid") == client_uuid), None)

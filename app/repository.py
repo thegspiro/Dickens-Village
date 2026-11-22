@@ -229,18 +229,20 @@ class MySQLRepository:
         items = self._all("SELECT * FROM items ORDER BY id")
         extras = self._all("SELECT * FROM item_extras ORDER BY item_id, id")
         photos = self._all("SELECT id, item_id, client_uuid FROM item_photos ORDER BY item_id, id")
+        scans = self._all("SELECT id, item_id FROM item_scans ORDER BY item_id, id")
         self._end_read()
-        return {"items": items, "extras": extras, "photos": photos}
+        return {"items": items, "extras": extras, "photos": photos, "scans": scans}
 
     def snapshot_etag(self) -> str:
         row = self._one(
             "SELECT "
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(version), 0), COALESCE(MAX(id), 0)) FROM items) AS i, "
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(version), 0), COALESCE(MAX(id), 0)) FROM item_extras) AS e, "
-            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_photos) AS p"
+            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_photos) AS p, "
+            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_scans) AS s"
         )
         self._end_read()
-        return f"{row['i']}/{row['e']}/{row['p']}"
+        return f"{row['i']}/{row['e']}/{row['p']}/{row['s']}"
 
     def catalog_all(self) -> list[dict[str, Any]]:
         rows = self._all(
@@ -261,13 +263,14 @@ class MySQLRepository:
     def delete_item(self, item_id: int) -> list[str] | None:
         """Delete an item and (via ON DELETE CASCADE) its extras, links and photo rows.
 
-        Returns the photo filenames to remove from disk, or None if the item did not exist.
+        Returns the photo and scan filenames to remove from disk, or None if the item did not exist.
         """
         with self._write() as cur:
             cur.execute("SELECT id FROM items WHERE id = %s FOR UPDATE", (item_id,))
             if cur.fetchone() is None:
                 return None
-            cur.execute("SELECT filename FROM item_photos WHERE item_id = %s", (item_id,))
+            cur.execute("SELECT filename FROM item_photos WHERE item_id = %s "
+                        "UNION ALL SELECT filename FROM item_scans WHERE item_id = %s", (item_id, item_id))
             filenames = [row["filename"] for row in cur.fetchall()]
             cur.execute("DELETE FROM items WHERE id = %s", (item_id,))
         log.info("Deleted item id=%s (%d photos)", item_id, len(filenames))
@@ -468,6 +471,38 @@ class MySQLRepository:
                 (item_id, filename, original_name, client_uuid),
             )
             return int(cur.lastrowid)
+
+    # -- 3D scans --------------------------------------------------------------
+
+    def list_scans(self, item_id: int) -> list[dict[str, Any]]:
+        rows = self._all("SELECT * FROM item_scans WHERE item_id = %s ORDER BY created_at, id", (item_id,))
+        self._end_read()
+        return rows
+
+    def get_scan(self, scan_id: int) -> dict[str, Any] | None:
+        row = self._one("SELECT * FROM item_scans WHERE id = %s", (scan_id,))
+        self._end_read()
+        return row
+
+    def add_scan(self, item_id: int, filename: str, original_name: str | None, size_bytes: int) -> int | None:
+        with self._write() as cur:
+            cur.execute("SELECT id FROM items WHERE id = %s FOR UPDATE", (item_id,))
+            if cur.fetchone() is None:
+                return None
+            cur.execute(
+                "INSERT INTO item_scans (item_id, filename, original_name, size_bytes) VALUES (%s, %s, %s, %s)",
+                (item_id, filename, original_name, size_bytes),
+            )
+            return int(cur.lastrowid)
+
+    def delete_scan(self, scan_id: int) -> dict[str, Any] | None:
+        with self._write() as cur:
+            cur.execute("SELECT * FROM item_scans WHERE id = %s FOR UPDATE", (scan_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cur.execute("DELETE FROM item_scans WHERE id = %s", (scan_id,))
+        return row
 
     def get_photo_by_client_uuid(self, client_uuid: str) -> dict[str, Any] | None:
         row = self._one("SELECT * FROM item_photos WHERE client_uuid = %s", (client_uuid,))
