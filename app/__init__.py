@@ -54,7 +54,7 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=cfg.cookie_secure,
-        PERMANENT_SESSION_LIFETIME=dt.timedelta(days=14),
+        PERMANENT_SESSION_LIFETIME=dt.timedelta(days=30),
     )
     app.extensions["dickens_throttle"] = LoginThrottle()
     app.extensions["dickens_repo_factory"] = factory
@@ -77,9 +77,11 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
         CONDITIONS=CONDITIONS,
     )
 
+    from .api import api
     from .views import bp
 
     app.register_blueprint(bp)
+    app.register_blueprint(api)
 
     @app.teardown_appcontext
     def _close_repo(_exc: BaseException | None) -> None:
@@ -91,7 +93,7 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
     def _security_headers(response: Any) -> Any:
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; "
+            "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; "
             "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")

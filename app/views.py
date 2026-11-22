@@ -206,6 +206,15 @@ def service_worker() -> Any:
     return response
 
 
+@bp.get("/app")
+def offline_app() -> Any:
+    """The phone app shell. Public: it contains no data and is cached for offline use;
+    the app asks the API for data, which needs a login."""
+    response = current_app.make_response(render_template("offline_app.html"))
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @bp.get("/offline")
 def offline() -> Any:
     return render_template("offline.html")
