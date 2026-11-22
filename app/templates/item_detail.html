@@ -83,6 +83,39 @@
   </section>
 </div>
 
+<section class="card" id="scans">
+  <h2>3D scans {% if scans %}<span class="muted">({{ scans|length }})</span>{% endif %}</h2>
+  {% for s in scans %}
+  <figure class="scan">
+    {% if config.MODEL_VIEWER_AVAILABLE %}
+    <model-viewer src="{{ url_for('main.scan_file', scan_id=s.id) }}" camera-controls touch-action="pan-y"
+                  shadow-intensity="1" alt="3D scan of {{ item.name }}" class="scan-viewer" data-scan-id="{{ s.id }}">
+      <div slot="progress-bar" class="scan-progress" aria-hidden="true"></div>
+    </model-viewer>
+    <p class="scan-status hint" role="status" aria-live="polite">Loading the 3D view… Drag to turn it, pinch or scroll to zoom.</p>
+    {% else %}
+    <p class="muted">The 3D viewer isn't installed on this server; download the file to view it.</p>
+    {% endif %}
+    <figcaption>
+      {{ s.original_name or 'Scan' }} <span class="muted">· {{ s.size_text }} · added {{ s.created_at | nicedate }}</span>
+      <a href="{{ url_for('main.scan_download', scan_id=s.id) }}">Download</a>
+      <form method="post" action="{{ url_for('main.scan_delete', scan_id=s.id) }}" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link danger">Remove</button>
+      </form>
+    </figcaption>
+  </figure>
+  {% else %}
+  <p class="muted">No 3D scans yet. Export one from a scanning app (Polycam, Scaniverse, Luma…) as a <strong>.glb</strong> file.</p>
+  {% endfor %}
+  <form method="post" action="{{ url_for('main.scan_add', item_id=item.id) }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="scan">Add a 3D scan (.glb, or a self-contained .gltf; up to {{ config.DICKENS.max_scan_mb }} MB)</label>
+    <input id="scan" type="file" name="scan" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" multiple>
+    <button type="submit">Upload scan</button>
+  </form>
+</section>
+
 <section class="card" id="extras">
   <h2>Extras {% if item.extras_count %}<span class="muted">({{ item.extras_count }})</span>{% endif %}</h2>
   <p class="muted">Pieces that go with this item, such as light cords, bulbs, signs or small attached accessories.</p>
@@ -154,4 +187,10 @@
   {% endif %}
 </section>
 <p class="muted">Added {{ item.created_at | nicedate }} · Updated {{ item.updated_at | nicedate }}</p>
+{% endblock %}
+{% block scripts %}
+{% if scans and config.MODEL_VIEWER_AVAILABLE %}
+<script src="{{ url_for('static', filename='scan-viewer.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='vendor/model-viewer/model-viewer.min.js') }}"></script>
+{% endif %}
 {% endblock %}

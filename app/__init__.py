@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from pathlib import Path
 from decimal import Decimal
 from typing import Any, Callable
 
@@ -16,6 +17,9 @@ from .config import Config, load_config
 from .validation import CATEGORIES, CONDITIONS, format_inches
 
 RepoFactory = Callable[[Config], Any]
+
+# Inline stylesheet(s) added by the pinned @google/model-viewer (scripts/fetch_vendor.sh).
+MODEL_VIEWER_STYLE_HASHES = ("'sha256-yhlpZVZMy2vXExwTGihUWVSrOxyhMuvj+Ygg7pyBWek='",)
 
 
 def _mysql_repo_factory(cfg: Config) -> Any:
@@ -51,7 +55,7 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
         DICKENS=cfg,
         # Whole-request cap (several photos at once); each photo is also checked
         # against MAX_UPLOAD_MB on its own.
-        MAX_CONTENT_LENGTH=max(cfg.max_request_mb, cfg.max_upload_mb) * 1024 * 1024,
+        MAX_CONTENT_LENGTH=(max(cfg.max_request_mb, cfg.max_upload_mb, cfg.max_scan_mb) + 1) * 1024 * 1024,
         SESSION_COOKIE_NAME="dickens_session",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -79,6 +83,11 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
         CONDITIONS=CONDITIONS,
     )
 
+    viewer = Path(app.static_folder) / "vendor" / "model-viewer" / "model-viewer.min.js"
+    app.config["MODEL_VIEWER_AVAILABLE"] = viewer.is_file()
+    if not viewer.is_file():
+        app.logger.info("3D viewer files not installed (run scripts/fetch_vendor.sh); scans offer downloads only")
+
     from .api import api
     from .views import bp
 
@@ -93,10 +102,23 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
 
     @app.after_request
     def _security_headers(response: Any) -> Any:
+        script_src = "'self'"
+        style_src = "'self'"
+        extra = ""
+        if g.get("needs_3d_viewer"):
+            # model-viewer 4.0.0 inserts one fixed inline <style>; allow exactly
+            # that stylesheet by its hash (not inline styles in general). If the
+            # pinned version changes, the browser tests report the new hash.
+            style_src += " " + " ".join(MODEL_VIEWER_STYLE_HASHES)
+            # Only on pages that show a 3D scan: the viewer compiles WebAssembly
+            # decoders and runs them in workers created from blob: URLs, and
+            # reads textures embedded in models as blob:/data: URLs.
+            script_src += " 'wasm-unsafe-eval'"
+            extra = "; worker-src 'self' blob:; connect-src 'self' blob: data:"
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; "
-            "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+            f"default-src 'self'; img-src 'self' blob: data:; style-src {style_src}; script-src {script_src}; "
+            f"form-action 'self'; frame-ancestors 'none'; base-uri 'none'{extra}",
         )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")

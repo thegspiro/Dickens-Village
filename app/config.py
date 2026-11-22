@@ -77,6 +77,7 @@ class Config:
     upload_dir: str
     max_upload_mb: int
     max_request_mb: int
+    max_scan_mb: int
     trusted_proxies: int
     log_level: str
     database: DatabaseConfig
@@ -120,6 +121,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         upload_dir=_require(env, "UPLOAD_DIR"),
         max_upload_mb=_int(env, "MAX_UPLOAD_MB", 25, 1, 200),
         max_request_mb=_int(env, "MAX_REQUEST_MB", 200, 1, 2000),
+        max_scan_mb=_int(env, "MAX_SCAN_MB", 100, 1, 2000),
         trusted_proxies=_int(env, "TRUSTED_PROXIES", 0, 0, 5),
         log_level=log_level,
         database=load_database_config(env),

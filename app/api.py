@@ -144,11 +144,15 @@ def snapshot() -> Any:
     photo_map: dict[int, list[dict[str, Any]]] = {}
     for row in data["photos"]:
         photo_map.setdefault(row["item_id"], []).append({"id": row["id"], "client_uuid": row["client_uuid"]})
+    scan_map: dict[int, list[dict[str, Any]]] = {}
+    for row in data.get("scans", []):
+        scan_map.setdefault(row["item_id"], []).append({"id": row["id"]})
     items = []
     for row in data["items"]:
         item = item_to_json(row)
         item["extras"] = extras.get(row["id"], [])
         item["photos"] = photo_map.get(row["id"], [])
+        item["scans"] = scan_map.get(row["id"], [])
         items.append(item)
     return _with_etag({"etag": etag, "items": items}, etag)
 
