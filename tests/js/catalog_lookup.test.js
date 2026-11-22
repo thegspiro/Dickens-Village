@@ -49,3 +49,10 @@ test("detailLine names the list and drops a repeated set name", () => {
   assert.equal(lookup.detailLine({ list: "accessories", details: "set of 2", parent_name: null }),
     "Accessories list · set of 2");
 });
+
+test("isLocalUrl only accepts same-site paths", () => {
+  assert.equal(lookup.isLocalUrl("/catalog-photos/3/thumb"), true);
+  for (const bad of ["//evil.example/x.jpg", "https://evil.example/x.jpg", "javascript:alert(1)", "/\\evil", null, undefined, 5]) {
+    assert.equal(lookup.isLocalUrl(bad), false, String(bad));
+  }
+});

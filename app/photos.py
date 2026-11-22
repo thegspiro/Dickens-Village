@@ -26,6 +26,7 @@ ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
 MAX_PIXELS = 40_000_000
 MAX_EDGE = 2000
 JPEG_QUALITY = 85
+THUMB_EDGE = 320
 FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.jpg$")
 
 
@@ -55,9 +56,34 @@ def _open_checked(stream: IO[bytes]) -> Image.Image:
             raise PhotoError("That image file appears to be damaged.") from None
 
 
+def thumb_name(filename: str) -> str:
+    """Name of the small preview stored next to a photo (abc.jpg -> abc.thumb.jpg)."""
+    return filename[: -len(".jpg")] + ".thumb.jpg"
+
+
+def _write_jpeg(image: Image.Image, path: Path) -> None:
+    # Write to a temp file in the same directory, then rename, so a crash
+    # never leaves a half-written photo under its final name.
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=".upload-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            image.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def save_photo(stream: IO[bytes], upload_dir: str) -> str:
-    """Validate and store an uploaded image. Returns the stored filename."""
+    """Validate and store an uploaded image plus a small thumbnail.
+
+    Returns the stored filename; the thumbnail is thumb_name(filename).
+    """
     image = _open_checked(stream)
+    thumb = None
     try:
         image = ImageOps.exif_transpose(image)
         if image.mode not in ("RGB", "L"):
@@ -66,40 +92,49 @@ def save_photo(stream: IO[bytes], upload_dir: str) -> str:
             background.paste(rgba, mask=rgba.split()[-1])
             image = background
         image.thumbnail((MAX_EDGE, MAX_EDGE))
+        thumb = image.copy()
+        thumb.thumbnail((THUMB_EDGE, THUMB_EDGE))
 
         directory = Path(upload_dir)
         directory.mkdir(parents=True, exist_ok=True)
         filename = f"{secrets.token_hex(16)}.jpg"
-        # Write to a temp file in the same directory, then rename, so a crash
-        # never leaves a half-written photo under its final name.
-        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".upload-", suffix=".tmp")
+        _write_jpeg(thumb, directory / thumb_name(filename))
         try:
-            with os.fdopen(fd, "wb") as out:
-                image.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-            os.replace(tmp_path, directory / filename)
+            _write_jpeg(image, directory / filename)
         except Exception:
-            try:
-                os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
+            _unlink_quietly(directory / thumb_name(filename))
             raise
     finally:
         image.close()
+        if thumb is not None:
+            thumb.close()
     log.info("Stored photo %s", filename)
     return filename
 
 
+def _unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.exception("Could not delete %s", path.name)
+
+
 def delete_photo_file(upload_dir: str, filename: str) -> None:
+    """Delete a stored photo and its thumbnail (photos from before thumbnails have none)."""
     if not FILENAME_RE.match(filename):
         log.error("Refusing to delete unexpected photo filename %r", filename)
         return
+    path = Path(upload_dir) / filename
     try:
-        (Path(upload_dir) / filename).unlink()
+        path.unlink()
         log.info("Deleted photo file %s", filename)
     except FileNotFoundError:
         log.warning("Photo file already missing: %s", filename)
     except OSError:
         log.exception("Could not delete photo file %s", filename)
+    _unlink_quietly(Path(upload_dir) / thumb_name(filename))
 
 
 def clean_original_name(name: str | None) -> str | None:

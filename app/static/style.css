@@ -126,3 +126,8 @@ th { font-size: .85rem; color: var(--muted); font-weight: 600; }
 .catalog-linked { display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: center; margin: 0 0 1rem; padding: .45rem .7rem; background: var(--ok-bg); color: var(--ok-ink); border-radius: 6px; }
 .catalog-linked label.check { margin: 0; }
 .combo-number { font-weight: 600; color: var(--accent); }
+.thumb-cell { width: 64px; }
+.thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); display: block; }
+.combo-results li.has-thumb { display: grid; grid-template-columns: 48px 1fr; gap: 0 .6rem; align-items: center; }
+.combo-thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); grid-row: span 2; }
+.combo-thumb-empty { width: 48px; height: 48px; border-radius: 4px; background: #efe9df; grid-row: span 2; }

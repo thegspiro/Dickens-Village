@@ -18,7 +18,7 @@
       {% if catalog %}
       <dt>Catalog listing</dt>
       <dd>
-        {{ catalog.item_number or 'No number' }} · {{ catalog.name }}{% if catalog.parent_name %} <span class="muted">(part of “{{ catalog.parent_name }}”)</span>{% endif %}<br>
+        <a href="{{ url_for('main.catalog_entry', catalog_id=catalog.id) }}">{{ catalog.item_number or 'No number' }} · {{ catalog.name }}</a>{% if catalog.parent_name %} <span class="muted">(part of “{{ catalog.parent_name }}”)</span>{% endif %}<br>
         <span class="muted">{{ 'Lighted' if catalog.list_name == 'lighted' else 'Accessories' }} list · {{ catalog.year_issued or '?' }}–{{ 'Current' if catalog.is_current else (catalog.year_retired or '?') }}</span>
         {% if catalog.details %}<br><span class="muted">{{ catalog.details }}</span>{% endif %}
       </dd>
@@ -43,7 +43,7 @@
     <div class="photos">
       {% for p in photos %}
       <figure>
-        <a href="{{ url_for('main.photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.photo_file', photo_id=p.id) }}" alt="Photo of {{ item.name }}" loading="lazy"></a>
+        <a href="{{ url_for('main.photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.photo_thumb', photo_id=p.id) }}" alt="Photo of {{ item.name }}" loading="lazy"></a>
         <form method="post" action="{{ url_for('main.photo_delete', photo_id=p.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="link danger">Remove</button>
@@ -51,13 +51,24 @@
       </figure>
       {% endfor %}
     </div>
-    {% else %}<p class="muted">No photos yet.</p>{% endif %}
+    {% else %}<p class="muted">No photos of your piece yet.</p>{% endif %}
     <form method="post" action="{{ url_for('main.photo_add', item_id=item.id) }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label for="photo">Add a photo (JPEG, PNG or WebP)</label>
-      <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" required>
+      <label for="photo">Add photos (JPEG, PNG or WebP; pick several at once if you like)</label>
+      <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" multiple required>
       <button type="submit">Upload</button>
     </form>
+    {% if catalog %}
+    <h3>Catalog reference photos</h3>
+    {% if catalog_photos %}
+    <div class="photos">
+      {% for p in catalog_photos %}
+      <figure><a href="{{ url_for('main.catalog_photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.catalog_photo_thumb', photo_id=p.id) }}" alt="Catalog photo of {{ catalog.name }}" loading="lazy"></a></figure>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">None yet.</p>{% endif %}
+    <p><a href="{{ url_for('main.catalog_entry', catalog_id=catalog.id) }}#photos">Manage catalog photos</a></p>
+    {% endif %}
   </section>
 </div>
 

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.name }} · Catalog{% endblock %}
+{% block content %}
+<div class="title-row">
+  <h1>{{ entry.name }} <span class="muted">· {{ entry.item_number or 'No number' }}</span></h1>
+  <div class="actions">
+    <a class="button" href="{{ url_for('main.item_new', catalog_id=entry.id) }}">Add to my collection</a>
+  </div>
+</div>
+
+<div class="columns">
+  <section class="card">
+    <h2>Catalog details</h2>
+    <dl class="details">
+      <dt>Item number</dt><dd>{{ entry.item_number or '—' }}</dd>
+      {% if entry.parent_name %}<dt>Part of</dt><dd>{{ entry.parent_name }}{% if entry.parent_item_number %} <span class="muted">({{ entry.parent_item_number }})</span>{% endif %}</dd>{% endif %}
+      <dt>List</dt><dd>{{ 'Lighted items' if entry.list_name == 'lighted' else 'Accessories' }}</dd>
+      <dt>Issued / retired</dt><dd>{{ entry.year_issued or '?' }} – {{ 'Current' if entry.is_current else (entry.year_retired or '?') }}</dd>
+      {% if entry.series %}<dt>Series</dt><dd>{{ entry.series }}</dd>{% endif %}
+      {% if entry.details and entry.details != 'Part of "' ~ entry.parent_name ~ '"' %}<dt>Notes</dt><dd>{{ entry.details }}</dd>{% endif %}
+      <dt>Original retail</dt><dd>{{ (entry.srp_usd | money ~ ' US') if entry.srp_usd is not none else '—' }}{% if entry.srp_cad is not none %} · {{ entry.srp_cad | money }} CAD{% endif %}</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>In your collection</h2>
+    {% if owned %}
+    <ul class="links">
+      {% for i in owned %}
+      <li>
+        <a href="{{ url_for('main.item_detail', item_id=i.id) }}">{{ i.name }}</a>
+        <span class="muted">{{ CONDITIONS[i.condition_grade] if i.condition_grade else 'Not graded' }}{% if i.storage_tub %} · Tub {{ i.storage_tub }}{% endif %}{% if i.storage_tray %} · Tray {{ i.storage_tray }}{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">None of your pieces are linked to this entry yet.</p>{% endif %}
+  </section>
+</div>
+
+<section class="card" id="photos">
+  <h2>Reference photos <span class="muted">({{ photos|length }})</span></h2>
+  <p class="muted">Photos here show in the catalog lookup and on every piece linked to this entry. They are stored only on your server.</p>
+  {% if photos %}
+  <div class="photos">
+    {% for p in photos %}
+    <figure>
+      <a href="{{ url_for('main.catalog_photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.catalog_photo_thumb', photo_id=p.id) }}" alt="Photo of {{ entry.name }}" loading="lazy"></a>
+      <form method="post" action="{{ url_for('main.catalog_photo_delete', photo_id=p.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link danger">Remove</button>
+      </form>
+    </figure>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="{{ url_for('main.catalog_photo_add', catalog_id=entry.id) }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="photo">Add photos (JPEG, PNG or WebP, up to {{ max_photos }} at a time)</label>
+    <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" multiple required>
+    <button type="submit">Upload</button>
+  </form>
+</section>
+<p><a href="{{ url_for('main.catalog_browse') }}">Back to catalog search</a></p>
+{% endblock %}
