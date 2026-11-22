@@ -9,14 +9,14 @@ A self-hosted tracker for a Department 56 Dickens' Village collection: buildings
 - **Current condition:** a grade (Mint → Damaged), condition notes, the date you last checked, and whether you have the original box and sleeve.
 - **Extras:** any number per piece (light cord, bulb, sign…), each with its own quantity, condition and notes. The collection list can filter on "has extras."
 - **Links** between a building and the figures and accessories that go with it.
-- **Photos:** uploads are re-encoded to JPEG and their metadata, including GPS location, is removed.
+- **Photos:** upload several at once, for your own pieces and as reference photos on catalog entries. Uploads are re-encoded to JPEG with their metadata (including GPS location) removed, and a small thumbnail is saved alongside. Catalog photos show in the lookup and on every piece linked to that entry.
 - **Purchase and value:** date, price paid, where you bought it, estimated value. The **Summary** page shows the totals.
 - **Catalog lookup:** the Add-a-piece form has a lookup box. Type an item number (`56.65005`, `65005` or `5665005` all work) or part of a name, then pick the piece. Name, item number, category, series and years fill in, and the piece is linked to its catalog entry so its page shows the original retail price. Pieces that share a number are listed separately, each with its name and which list it came from.
 - Search, filters, sorting and paging on the collection list.
 
 ## Reference catalog
 
-`data/catalog/dickens_village_2025.csv` holds Department 56's 2025 Dickens' Village checklists: 399 lighted pieces and 361 accessories, including the individual pieces of sets. It loads into the database on every start (`python -m app.catalog sync`). Loading is an upsert, so it is safe to repeat, and corrections to the CSV take effect on the next restart. Lighted pieces fill in as Building and accessories as Accessory; change the category on the form when a piece is a figure.
+`data/catalog/dickens_village_2025.csv` holds Department 56's 2025 Dickens' Village checklists: 399 lighted pieces and 361 accessories, including the individual pieces of sets. Browse it from the **Catalog** tab, where each entry has its own page with your reference photos, the pieces you own that are linked to it, and an "Add to my collection" button. It loads into the database on every start (`python -m app.catalog sync`). Loading is an upsert, so it is safe to repeat, and corrections to the CSV take effect on the next restart. Lighted pieces fill in as Building and accessories as Accessory; change the category on the form when a piece is a figure.
 
 Problems in the source PDFs, such as a retirement year printed as 2917 or one item number used for two pieces, are listed in `data/catalog/dickens_village_2025_source_issues.txt`. The impossible years were left blank rather than guessed. `scripts/catalog/` has the scripts that built the CSV from the PDFs.
 

@@ -29,6 +29,7 @@ class FakeRepository:
         self.links: set[tuple[int, int]] = set()
         self.photos: dict[int, dict[str, Any]] = {}
         self.catalog: dict[int, dict[str, Any]] = {}
+        self.catalog_photos: dict[int, dict[str, Any]] = {}
         self._ids = itertools.count(1)
         self.closed = 0
 
@@ -188,10 +189,35 @@ class FakeRepository:
             if q in number or q in row["name"].lower() or (len(digits) >= 2 and digits in number.replace(".", "")):
                 rank = 0 if number == q else 1 if number.startswith(q) else 2 if q in number else 3
                 hits.append((rank, number, row["id"], row))
-        return [h[3] for h in sorted(hits, key=lambda h: h[:3])][:limit]
+        return [self._catalog_with_photos(h[3]) for h in sorted(hits, key=lambda h: h[:3])][:limit]
+
+    def _catalog_with_photos(self, row: dict[str, Any]) -> dict[str, Any]:
+        ids = sorted(p["id"] for p in self.catalog_photos.values() if p["catalog_id"] == row["id"])
+        return {**row, "photo_id": ids[0] if ids else None, "photo_count": len(ids)}
 
     def get_catalog_item(self, catalog_id: int) -> dict[str, Any] | None:
-        return self.catalog.get(catalog_id)
+        row = self.catalog.get(catalog_id)
+        return self._catalog_with_photos(row) if row else None
+
+    def list_catalog_photos(self, catalog_id: int) -> list[dict[str, Any]]:
+        return sorted((p for p in self.catalog_photos.values() if p["catalog_id"] == catalog_id), key=lambda p: p["id"])
+
+    def get_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
+        return self.catalog_photos.get(photo_id)
+
+    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None) -> int | None:
+        if catalog_id not in self.catalog:
+            return None
+        new_id = next(self._ids)
+        self.catalog_photos[new_id] = {"id": new_id, "catalog_id": catalog_id, "filename": filename,
+                                       "original_name": original_name}
+        return new_id
+
+    def delete_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
+        return self.catalog_photos.pop(photo_id, None)
+
+    def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
+        return sorted((i for i in self.items.values() if i.get("catalog_id") == catalog_id), key=lambda i: i["name"])
 
     def storage_summary(self) -> list[dict[str, Any]]:
         counts: dict[tuple, int] = {}

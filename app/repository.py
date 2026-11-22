@@ -35,7 +35,9 @@ _EXTRAS_COUNT = (
 _CATALOG_FIELDS = (
     "c.id, c.list_name, c.item_number, c.name, c.details, c.series, c.year_issued, "
     "c.year_retired, c.is_current, c.srp_usd, c.srp_cad, c.default_category, "
-    "p.name AS parent_name, p.item_number AS parent_item_number"
+    "p.name AS parent_name, p.item_number AS parent_item_number, "
+    "(SELECT MIN(cp.id) FROM catalog_photos cp WHERE cp.catalog_id = c.id) AS photo_id, "
+    "(SELECT COUNT(*) FROM catalog_photos cp WHERE cp.catalog_id = c.id) AS photo_count"
 )
 
 
@@ -369,6 +371,48 @@ class MySQLRepository:
         )
         self._end_read()
         return row
+
+    def list_catalog_photos(self, catalog_id: int) -> list[dict[str, Any]]:
+        rows = self._all(
+            "SELECT * FROM catalog_photos WHERE catalog_id = %s ORDER BY created_at, id", (catalog_id,)
+        )
+        self._end_read()
+        return rows
+
+    def get_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
+        row = self._one("SELECT * FROM catalog_photos WHERE id = %s", (photo_id,))
+        self._end_read()
+        return row
+
+    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None) -> int | None:
+        with self._write() as cur:
+            cur.execute("SELECT id FROM catalog_items WHERE id = %s FOR UPDATE", (catalog_id,))
+            if cur.fetchone() is None:
+                return None
+            cur.execute(
+                "INSERT INTO catalog_photos (catalog_id, filename, original_name) VALUES (%s, %s, %s)",
+                (catalog_id, filename, original_name),
+            )
+            return int(cur.lastrowid)
+
+    def delete_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
+        with self._write() as cur:
+            cur.execute("SELECT * FROM catalog_photos WHERE id = %s FOR UPDATE", (photo_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cur.execute("DELETE FROM catalog_photos WHERE id = %s", (photo_id,))
+        return row
+
+    def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
+        """Pieces in the collection linked to a catalog entry."""
+        rows = self._all(
+            "SELECT id, name, category, condition_grade, storage_location, storage_tub, storage_tray "
+            "FROM items WHERE catalog_id = %s ORDER BY name, id",
+            (catalog_id,),
+        )
+        self._end_read()
+        return rows
 
     # -- summaries ------------------------------------------------------------
 

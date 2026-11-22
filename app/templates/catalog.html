@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Catalog{% endblock %}
+{% block content %}
+<h1>Catalog</h1>
+<form method="get" action="{{ url_for('main.catalog_browse') }}" class="card">
+  <label for="q">Item number or name</label>
+  <input id="q" name="q" value="{{ query }}" maxlength="100" placeholder="e.g. 56.65005, 65005 or Fezziwig" autofocus>
+  <button type="submit">Search</button>
+</form>
+
+{% if query and query|length < 2 %}
+  <p class="card">Type at least two characters.</p>
+{% elif query %}
+  {% if results %}
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Photo</th><th>Item #</th><th>Name</th><th>List</th><th>Years</th><th class="num">Original retail</th></tr></thead>
+    <tbody>
+    {% for r in results %}
+      <tr>
+        <td class="thumb-cell">{% if r.photo_id %}<img class="thumb" src="{{ url_for('main.catalog_photo_thumb', photo_id=r.photo_id) }}" alt="" loading="lazy">{% endif %}</td>
+        <td>{{ r.item_number or '—' }}</td>
+        <td><a href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}">{{ r.name }}</a>{% if r.parent_name %} <span class="muted">(part of “{{ r.parent_name }}”)</span>{% endif %}</td>
+        <td>{{ 'Lighted' if r.list_name == 'lighted' else 'Accessories' }}</td>
+        <td>{{ r.year_issued or '?' }}–{{ 'Current' if r.is_current else (r.year_retired or '?') }}</td>
+        <td class="num">{{ r.srp_usd | money or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if results|length == 100 %}<p class="muted">Showing the first 100 matches. Type more of the number or name to narrow it down.</p>{% endif %}
+  {% else %}
+  <p class="card">No catalog entries match “{{ query }}”.</p>
+  {% endif %}
+{% else %}
+  <p class="muted">Search the 2025 Dickens' Village lists to add reference photos to a piece or start a new entry in your collection from it.</p>
+{% endif %}
+{% endblock %}
