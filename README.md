@@ -75,6 +75,8 @@ Each migration is a pair of files in `migrations/`. Every up migration is idempo
 
 ## Tests
 
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`. It runs the Python tests against a real MySQL 8.4 (and fails if the integration tests were skipped), validates the catalog CSV, runs the JavaScript tests, and builds the Docker images. To run the same checks locally:
+
 ```sh
 pip install -r requirements-dev.txt
 python -m pytest                                          # unit tests, no database needed
