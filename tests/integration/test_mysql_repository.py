@@ -99,6 +99,10 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0004_measurements"
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM items LIKE 'height_in'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0003_catalog_photos"
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'catalog_photos'")
@@ -113,7 +117,8 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'items'")
             assert cur.fetchone() is None
-        assert migrate.migrate_up(conn, migrations) == ["0001_initial", "0002_catalog", "0003_catalog_photos"]
+        assert migrate.migrate_up(conn, migrations) == [
+            "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -349,3 +354,14 @@ def test_catalog_photos_and_linked_items(db_config, repo):
     finally:
         conn.close()
     assert repo.list_catalog_photos(entry["id"]) == []  # ON DELETE CASCADE
+
+
+def test_measurements_roundtrip_and_check(repo):
+    item_id = repo.create_item(item(height_in="7 1/8", box_depth_in="11.75"))
+    row = repo.get_item(item_id)
+    assert row["height_in"] == Decimal("7.125") and row["box_depth_in"] == Decimal("11.750")
+    assert row["width_in"] is None
+    bad = item()
+    bad["depth_in"] = Decimal("-1")
+    with pytest.raises(pymysql.err.OperationalError):
+        repo.create_item(bad)

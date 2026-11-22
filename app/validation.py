@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
-from decimal import Decimal, InvalidOperation
+import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Mapping
 
 CATEGORIES: dict[str, str] = {
@@ -36,6 +37,8 @@ ITEM_TEXT_FIELDS: dict[str, int] = {
 }
 ITEM_LONG_TEXT_FIELDS: dict[str, int] = {"condition_notes": 5000, "notes": 10000}
 ITEM_BOOL_FIELDS = ("has_original_box", "has_sleeve", "on_display")
+MEASUREMENT_FIELDS = ("height_in", "width_in", "depth_in", "box_height_in", "box_width_in", "box_depth_in")
+MAX_INCHES = Decimal("999.999")  # DECIMAL(6, 3): keeps eighths and sixteenths of an inch
 
 ITEM_COLUMNS = (
     "category",
@@ -49,6 +52,7 @@ ITEM_COLUMNS = (
     "condition_grade",
     "condition_checked_on",
     *ITEM_BOOL_FIELDS,
+    *MEASUREMENT_FIELDS,
     "catalog_id",
 )
 
@@ -120,6 +124,61 @@ def _money(form: Mapping[str, str], key: str, errors: dict[str, str]) -> Decimal
     return value.quantize(Decimal("0.01"))
 
 
+_FRACTION_RE = re.compile(r"^(?:(\d+)(?:\s+|-))?(\d+)\s*/\s*(\d+)$")
+_UNICODE_FRACTIONS = {"¼": " 1/4", "½": " 1/2", "¾": " 3/4", "⅛": " 1/8", "⅜": " 3/8", "⅝": " 5/8", "⅞": " 7/8"}
+
+
+def parse_inches(raw: str) -> Decimal | None:
+    """Parse '7.25', '7 1/4', '7-1/4', '7¼' or '3/4' (optionally ending in in, ", inches).
+
+    Returns None for blank input; raises ValueError for anything else invalid.
+    """
+    text = raw.strip().lower()
+    for suffix in ("inches", "inch", "in.", "in", '"', "”", "''"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+            break
+    for symbol, replacement in _UNICODE_FRACTIONS.items():
+        text = text.replace(symbol, replacement)
+    text = text.strip()
+    if not text:
+        return None
+    match = _FRACTION_RE.match(text)
+    if match:
+        whole, numerator, denominator = match.groups()
+        if int(denominator) == 0:
+            raise ValueError("zero denominator")
+        value = Decimal(whole or 0) + Decimal(numerator) / Decimal(denominator)
+    else:
+        if not re.fullmatch(r"\d*\.?\d+|\d+\.", text):
+            raise ValueError("not a number")
+        value = Decimal(text)
+    return value.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+
+
+def format_inches(value: Decimal | float | str | None) -> str:
+    """7.250 -> '7.25', 10.000 -> '10'; '' for None."""
+    if value is None or value == "":
+        return ""
+    text = f"{Decimal(value):f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _inches(form: Mapping[str, str], key: str, errors: dict[str, str]) -> Decimal | None:
+    raw = form.get(key, "")
+    try:
+        value = parse_inches(raw)
+    except (ValueError, ArithmeticError):
+        errors[key] = "Enter inches like 7.25 or 7 1/4."
+        return None
+    if value is None:
+        return None
+    if value <= 0 or value > MAX_INCHES:
+        errors[key] = "Must be more than 0 and under 1000 inches."
+        return None
+    return value
+
+
 def _choice(
     form: Mapping[str, str], key: str, choices: Mapping[str, str], errors: dict[str, str], required: bool
 ) -> str | None:
@@ -167,6 +226,8 @@ def parse_item_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, 
     data["condition_grade"] = _choice(form, "condition_grade", CONDITIONS, errors, required=False)
     for key in ITEM_BOOL_FIELDS:
         data[key] = _bool(form, key)
+    for key in MEASUREMENT_FIELDS:
+        data[key] = _inches(form, key, errors)
 
     data["catalog_id"] = None
     raw_catalog = form.get("catalog_id", "").strip()

@@ -38,6 +38,8 @@ from .repository import PAGE_SIZE
 from .validation import (
     ITEM_BOOL_FIELDS,
     ITEM_COLUMNS,
+    MEASUREMENT_FIELDS,
+    format_inches,
     SORTS,
     STORAGE_COLUMNS,
     parse_extra_form,
@@ -78,6 +80,8 @@ def _row_to_form(row: dict[str, Any]) -> dict[str, str]:
             form[key] = "1" if value else ""
         elif value is None:
             form[key] = ""
+        elif key in MEASUREMENT_FIELDS and value is not None:
+            form[key] = format_inches(value)
         elif isinstance(value, Decimal):
             form[key] = f"{value:.2f}"
         elif isinstance(value, dt.date):
