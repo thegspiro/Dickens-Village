@@ -1,0 +1,116 @@
+/*
+ * IndexedDB storage for the phone's offline copy.
+ *
+ * Stores: items, extras (index itemKey), pending photos (index itemKey),
+ * catalog, meta (key/value). Everything is erased on logout (wipe()).
+ */
+
+export const DB_NAME = "dickens-offline";
+const DB_VERSION = 1;
+let dbPromise = null;
+
+function open() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise(function (resolve, reject) {
+    var req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = function () {
+      var db = req.result;
+      db.createObjectStore("items", { keyPath: "key" });
+      db.createObjectStore("extras", { keyPath: "key" }).createIndex("itemKey", "itemKey");
+      db.createObjectStore("photos", { keyPath: "key" }).createIndex("itemKey", "itemKey");
+      db.createObjectStore("catalog", { keyPath: "id" });
+      db.createObjectStore("meta", { keyPath: "k" });
+    };
+    req.onsuccess = function () {
+      var db = req.result;
+      db.onversionchange = function () { db.close(); dbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = function () { dbPromise = null; reject(req.error); };
+    req.onblocked = function () { reject(new Error("Close other tabs of the tracker and try again.")); };
+  });
+  return dbPromise;
+}
+
+function done(tx) {
+  return new Promise(function (resolve, reject) {
+    tx.oncomplete = function () { resolve(); };
+    tx.onerror = function () { reject(tx.error); };
+    tx.onabort = function () { reject(tx.error || new Error("Storage transaction aborted")); };
+  });
+}
+
+function request(req) {
+  return new Promise(function (resolve, reject) {
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+}
+
+export async function get(store, key) {
+  var db = await open();
+  return request(db.transaction(store).objectStore(store).get(key));
+}
+
+export async function all(store) {
+  var db = await open();
+  return request(db.transaction(store).objectStore(store).getAll());
+}
+
+export async function byItem(store, itemKey) {
+  var db = await open();
+  return request(db.transaction(store).objectStore(store).index("itemKey").getAll(itemKey));
+}
+
+export async function put(store, value) {
+  var db = await open();
+  var tx = db.transaction(store, "readwrite");
+  tx.objectStore(store).put(value);
+  return done(tx);
+}
+
+/* Several puts and deletes in one transaction: either all happen or none. */
+export async function apply(store, puts, removes) {
+  var db = await open();
+  var tx = db.transaction(store, "readwrite");
+  var os = tx.objectStore(store);
+  (puts || []).forEach(function (v) { os.put(v); });
+  (removes || []).forEach(function (k) { os.delete(k); });
+  return done(tx);
+}
+
+export async function replaceAll(store, values) {
+  var db = await open();
+  var tx = db.transaction(store, "readwrite");
+  var os = tx.objectStore(store);
+  os.clear();
+  values.forEach(function (v) { os.put(v); });
+  return done(tx);
+}
+
+export async function del(store, key) {
+  var db = await open();
+  var tx = db.transaction(store, "readwrite");
+  tx.objectStore(store).delete(key);
+  return done(tx);
+}
+
+export async function getMeta(k, fallback) {
+  var row = await get("meta", k);
+  return row ? row.v : fallback;
+}
+
+export function setMeta(k, v) {
+  return put("meta", { k: k, v: v });
+}
+
+export async function wipe() {
+  if (dbPromise) {
+    try { (await dbPromise).close(); } catch (e) { /* already closed */ }
+    dbPromise = null;
+  }
+  await new Promise(function (resolve) {
+    var req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = req.onerror = req.onblocked = function () { resolve(); };
+  });
+}

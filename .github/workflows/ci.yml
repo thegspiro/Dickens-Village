@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python tests (unit + MySQL integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: dickens_test
+          MYSQL_USER: dickens_test
+          MYSQL_PASSWORD: dickens_test_only
+          MYSQL_ROOT_PASSWORD: dickens_test_root_only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -udickens_test -pdickens_test_only --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+    env:
+      TEST_DB_HOST: 127.0.0.1
+      TEST_DB_PORT: "3306"
+      TEST_DB_NAME: dickens_test
+      TEST_DB_USER: dickens_test
+      TEST_DB_PASSWORD: dickens_test_only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        # -rs lists skipped tests; the check below fails the job if the
+        # integration tests were skipped instead of run against MySQL.
+        run: python -m pytest -p no:cacheprovider -rs | tee pytest.log
+        shell: bash -o pipefail {0}
+      - name: Make sure the MySQL integration tests ran
+        run: |
+          if grep -q "SKIPPED.*integration" pytest.log; then
+            echo "::error::MySQL integration tests were skipped"
+            exit 1
+          fi
+      - name: Validate reference catalog data
+        if: hashFiles('app/catalog.py') != ''
+        run: python -m app.catalog check
+
+  javascript:
+    name: JavaScript tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check syntax of browser scripts
+        run: |
+          find app/static -name '*.js' -o -name '*.mjs' | sort | while read -r f; do
+            node --check "$f" || exit 1
+          done
+      - name: Run tests
+        run: |
+          files=$(find tests/js -name '*.test.js' -o -name '*.test.mjs' 2>/dev/null | sort)
+          if [ -z "$files" ]; then echo "No JavaScript tests"; exit 0; fi
+          node --test $files
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check entrypoint is valid POSIX sh
+        run: sh -n docker/entrypoint.sh
+      - name: Build runtime image
+        run: docker build --target runtime -t dickens-village-tracker:ci .
+      - name: Build test image
+        run: docker build --target test -t dickens-village-tracker:ci-test .
+      - name: Check docker compose files
+        run: |
+          cp .env.example .env
+          sed -i 's/^APP_PORT=$/APP_PORT=8000/; s/^DB_PASSWORD=$/DB_PASSWORD=x/; s/^MYSQL_ROOT_PASSWORD=$/MYSQL_ROOT_PASSWORD=x/' .env
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.test.yml config --quiet

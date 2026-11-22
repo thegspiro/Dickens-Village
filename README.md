@@ -59,7 +59,22 @@ The tracker is an installable web app (PWA). Open it in your phone's browser ove
 
 It opens full-screen with its own icon. Phones only allow installing, and the service worker only runs, on an `https://` address, so serve it through your reverse proxy (see below). Over plain `http://` the home-screen icon still works, but as a shortcut to the website rather than an installed app.
 
-The pages adapt to small screens: the menu collapses, lists become cards, and photo forms have a **Take a photo** button that opens the camera. If the server can't be reached, the app shows an "offline" page. In this version, viewing or editing your collection still needs a connection.
+The pages adapt to small screens: the menu collapses, lists become cards, and photo forms have a **Take a photo** button that opens the camera.
+
+#### Working offline
+
+The **Phone app** (menu → *Phone app*, or `/app`) keeps a copy of your collection and the catalog on the phone. If the server can't be reached, any page you open goes to the phone app instead. Offline you can:
+
+- browse and search your pieces;
+- add pieces, including filling them in from the catalog;
+- edit pieces and extras, and add extras;
+- take or attach photos.
+
+Changes are saved on the phone, and the pill at the top shows how many are waiting. They sync automatically when you're back online; tap the pill to sync right away. Browsing the website online also keeps the phone's copy up to date.
+
+If the same field was changed on the phone and somewhere else, that piece is held and listed under **Needs attention**. There you choose which value to keep for each field. Changes to different fields are combined automatically. Deleting pieces and managing links between buildings and figures stay on the full site.
+
+Logins last 30 days. If yours expires while you're offline, your changes stay on the phone and sync after you log in again. **Logging out erases the phone's copy**, and the app warns you first if anything hasn't synced.
 
 ### HTTPS and reverse proxies
 
@@ -87,10 +102,12 @@ Each migration is a pair of files in `migrations/`. Every up migration is idempo
 
 ## Tests
 
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`. It runs the Python tests against a real MySQL 8.4 (and fails if the integration tests were skipped), validates the catalog CSV, runs the JavaScript tests, and builds the Docker images. To run the same checks locally:
+
 ```sh
 pip install -r requirements-dev.txt
 python -m pytest                                          # unit tests, no database needed
-node --test tests/js/catalog_lookup.test.js               # catalog lookup script (Node 18+)
+node --test tests/js/catalog_lookup.test.js tests/js/offline_model.test.mjs   # browser scripts (Node 18+)
 docker compose -f docker-compose.test.yml run --rm tests  # everything, including MySQL integration tests
 docker compose -f docker-compose.test.yml down -v
 ```

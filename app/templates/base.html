@@ -16,7 +16,7 @@
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </head>
-<body>
+<body{% if current_user() %} data-logged-in="1"{% endif %}>
   <header class="site-header">
     <a class="brand" href="{{ url_for('main.item_list') }}">Dickens Village Tracker</a>
     {% if current_user() %}
@@ -25,9 +25,10 @@
       <a href="{{ url_for('main.item_list') }}">Collection</a>
       <a href="{{ url_for('main.storage') }}">Storage</a>
       <a href="{{ url_for('main.catalog_browse') }}">Catalog</a>
+      <a href="{{ url_for('main.offline_app') }}">Phone app</a>
       <a href="{{ url_for('main.summary') }}">Summary</a>
       <a class="button" href="{{ url_for('main.item_new') }}">Add piece</a>
-      <form method="post" action="{{ url_for('main.logout') }}" class="inline">
+      <form method="post" action="{{ url_for('main.logout') }}" class="inline" id="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="link">Log out</button>
       </form>
