@@ -112,6 +112,7 @@ def test_viewer_only_when_installed_and_csp_relaxed_only_there(logged_in, fake_r
     csp = page.headers["Content-Security-Policy"]
     assert "<model-viewer" in body and "vendor/model-viewer/model-viewer.min.js" in body
     assert "script-src 'self' 'wasm-unsafe-eval'" in csp and "worker-src 'self' blob:" in csp
+    assert "style-src 'self' 'sha256-" in csp  # only the viewer's own fixed stylesheet
     assert "unsafe-inline" not in csp
     # other pages keep the strict policy
     assert "wasm-unsafe-eval" not in logged_in.get("/items").headers["Content-Security-Policy"]

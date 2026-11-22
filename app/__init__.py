@@ -18,6 +18,9 @@ from .validation import CATEGORIES, CONDITIONS, format_inches
 
 RepoFactory = Callable[[Config], Any]
 
+# Inline stylesheet(s) added by the pinned @google/model-viewer (scripts/fetch_vendor.sh).
+MODEL_VIEWER_STYLE_HASHES = ("'sha256-yhlpZVZMy2vXExwTGihUWVSrOxyhMuvj+Ygg7pyBWek='",)
+
 
 def _mysql_repo_factory(cfg: Config) -> Any:
     from .db import connect
@@ -100,8 +103,13 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
     @app.after_request
     def _security_headers(response: Any) -> Any:
         script_src = "'self'"
+        style_src = "'self'"
         extra = ""
         if g.get("needs_3d_viewer"):
+            # model-viewer 4.0.0 inserts one fixed inline <style>; allow exactly
+            # that stylesheet by its hash (not inline styles in general). If the
+            # pinned version changes, the browser tests report the new hash.
+            style_src += " " + " ".join(MODEL_VIEWER_STYLE_HASHES)
             # Only on pages that show a 3D scan: the viewer compiles WebAssembly
             # decoders and runs them in workers created from blob: URLs, and
             # reads textures embedded in models as blob:/data: URLs.
@@ -109,7 +117,7 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
             extra = "; worker-src 'self' blob:; connect-src 'self' blob: data:"
         response.headers.setdefault(
             "Content-Security-Policy",
-            f"default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src {script_src}; "
+            f"default-src 'self'; img-src 'self' blob: data:; style-src {style_src}; script-src {script_src}; "
             f"form-action 'self'; frame-ancestors 'none'; base-uri 'none'{extra}",
         )
         response.headers.setdefault("X-Content-Type-Options", "nosniff")

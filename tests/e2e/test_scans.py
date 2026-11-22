@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from playwright.sync_api import expect
 
 from tests.gltf_samples import glb_bytes
@@ -33,7 +35,10 @@ def test_scan_upload_view_download_delete(desk, tag, tmp_path):
         assert page.evaluate("document.querySelector('model-viewer').loaded") is True
         box = viewer.bounding_box()
         assert box["width"] > 200 and box["height"] > 200
-        page.screenshot(path=str(tmp_path / "scan.png"))
+        shots = os.environ.get("E2E_ARTIFACTS")
+        if shots:
+            os.makedirs(shots, exist_ok=True)
+            figure.screenshot(path=os.path.join(shots, "scan-viewer.png"))
     else:
         expect(figure).to_contain_text("viewer isn't installed")
 
