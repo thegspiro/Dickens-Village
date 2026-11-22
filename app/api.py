@@ -299,7 +299,8 @@ def upload_photo(item_id: int) -> Any:
         return _error(404, "That piece no longer exists.")
     upload_dir = current_app.config["DICKENS"].upload_dir
     try:
-        filename = photos.save_photo(upload.stream, upload_dir)
+        filename = photos.save_photo(upload.stream, upload_dir,
+                                     current_app.config["DICKENS"].max_upload_mb * 1024 * 1024)
     except photos.PhotoError as exc:
         return _error(422, str(exc))
     try:

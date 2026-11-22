@@ -60,6 +60,10 @@
   }
 
   function wipeOfflineData() {
+    try {
+      localStorage.removeItem("dickens-offline-enabled");
+      localStorage.removeItem("dickens-last-bg-sync");
+    } catch (e) { /* blocked */ }
     var jobs = [new Promise(function (resolve) {
       var req = indexedDB.deleteDatabase("dickens-offline");
       req.onsuccess = req.onerror = req.onblocked = function () { resolve(); };
@@ -76,8 +80,12 @@
     return Promise.all(jobs).catch(function () {});
   }
 
-  // Keep the phone's offline copy fresh while browsing the website (at most every 2 minutes).
-  if (document.body.dataset.loggedIn && window.indexedDB && navigator.onLine && window.isSecureContext) {
+  // Keep the offline copy fresh while browsing the website (at most every 2 minutes),
+  // but only on devices where the phone app has been opened: other browsers,
+  // such as a shared computer, never get a copy of the collection.
+  var offlineEnabled = false;
+  try { offlineEnabled = localStorage.getItem("dickens-offline-enabled") === "1"; } catch (e) { /* blocked */ }
+  if (offlineEnabled && document.body.dataset.loggedIn && window.indexedDB && navigator.onLine && window.isSecureContext) {
     var last = 0;
     try { last = Number(localStorage.getItem("dickens-last-bg-sync") || 0); } catch (e) { /* storage blocked */ }
     if (Date.now() - last > 2 * 60 * 1000) {

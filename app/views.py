@@ -64,6 +64,10 @@ def _upload_dir() -> str:
     return current_app.config["DICKENS"].upload_dir
 
 
+def _max_photo_bytes() -> int:
+    return current_app.config["DICKENS"].max_upload_mb * 1024 * 1024
+
+
 def _item_or_404(item_id: int) -> dict[str, Any]:
     item = repo().get_item(item_id)
     if item is None:
@@ -89,6 +93,37 @@ def _row_to_form(row: dict[str, Any]) -> dict[str, str]:
         else:
             form[key] = str(value)
     return form
+
+
+_FIELD_LABELS = {
+    "category": "Category", "name": "Name", "item_number": "Item number", "series": "Series",
+    "purchased_from": "Bought from", "storage_location": "Location", "storage_tub": "Tub",
+    "storage_tray": "Tray", "condition_notes": "Condition notes", "notes": "Notes",
+    "year_introduced": "Year introduced", "year_retired": "Year retired", "purchase_date": "Purchase date",
+    "price_paid": "Price paid", "estimated_value": "Estimated value", "condition_grade": "Condition",
+    "condition_checked_on": "Last checked", "has_original_box": "Original box", "has_sleeve": "Sleeve",
+    "on_display": "On display", "height_in": "Height", "width_in": "Width", "depth_in": "Depth",
+    "box_height_in": "Box height", "box_width_in": "Box width", "box_depth_in": "Box depth",
+    "catalog_id": "Catalog link", "description": "Description", "quantity": "Quantity",
+}
+
+
+def _stale_fields(submitted_version: str | None, row: dict[str, Any], submitted: dict[str, Any],
+                  saved: dict[str, Any]) -> list[tuple[str, str]] | None:
+    """If the record changed since the form was opened, list the saved values that
+    differ from what was submitted. None when the form is up to date (or has no version)."""
+    if not submitted_version or not submitted_version.isdigit():
+        return None
+    if int(submitted_version) == int(row.get("version") or 1):
+        return None
+    changed = []
+    for key, value in saved.items():
+        if key in submitted and submitted[key] != value:
+            shown = value
+            if key in ITEM_BOOL_FIELDS:
+                shown = "Yes" if value else "No"
+            changed.append((_FIELD_LABELS.get(key, key), "(blank)" if shown in (None, "") else str(shown)))
+    return changed or [("(no visible fields)", "only the version number changed")]
 
 
 def _check_catalog_link(data: dict[str, Any], errors: dict[str, str]) -> dict[str, Any] | None:
@@ -326,7 +361,9 @@ def item_edit(item_id: int) -> Any:
         check_csrf()
         data, errors = parse_item_form(request.form)
         catalog = _check_catalog_link(data, errors)
-        if not errors:
+        stale = None if errors else _stale_fields(
+            request.form.get("version"), item, _row_to_form(data), _row_to_form(item))
+        if not errors and not stale:
             if not repo().update_item(item_id, data):
                 abort(404)
             flash("Changes saved.", "success")
@@ -334,14 +371,14 @@ def item_edit(item_id: int) -> Any:
         return (
             render_template(
                 "item_form.html", form=request.form, errors=errors, item=item, catalog=catalog,
-                suggestions=_storage_suggestions(),
+                suggestions=_storage_suggestions(), version=item.get("version"), stale=stale,
             ),
-            400,
+            409 if stale else 400,
         )
     catalog = repo().get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None
     return render_template(
         "item_form.html", form=_row_to_form(item), errors={}, item=item, catalog=catalog,
-        suggestions=_storage_suggestions(),
+        suggestions=_storage_suggestions(), version=item.get("version"),
     )
 
 
@@ -404,19 +441,24 @@ def extra_edit(item_id: int, extra_id: int) -> Any:
     if request.method == "POST":
         check_csrf()
         data, errors = parse_extra_form(request.form)
-        if not errors:
+        saved = {"description": extra["description"], "quantity": extra["quantity"],
+                 "condition_grade": extra["condition_grade"], "notes": extra["notes"]}
+        stale = None if errors else _stale_fields(request.form.get("version"), extra, data, saved)
+        if not errors and not stale:
             if not repo().update_extra(item_id, extra_id, data):
                 abort(404)
             flash("Extra updated.", "success")
             return redirect(url_for("main.item_detail", item_id=item_id) + "#extras")
-        return render_template("extra_form.html", item=item, extra=extra, form=request.form, errors=errors), 400
+        return render_template("extra_form.html", item=item, extra=extra, form=request.form, errors=errors,
+                               version=extra.get("version"), stale=stale), 409 if stale else 400
     form = {
         "description": extra["description"],
         "quantity": str(extra["quantity"]),
         "condition_grade": extra["condition_grade"] or "",
         "notes": extra["notes"] or "",
     }
-    return render_template("extra_form.html", item=item, extra=extra, form=form, errors={})
+    return render_template("extra_form.html", item=item, extra=extra, form=form, errors={},
+                           version=extra.get("version"))
 
 
 @bp.post("/items/<int:item_id>/extras/<int:extra_id>/delete")
@@ -478,7 +520,7 @@ def _store_uploads(add_record: Callable[[str, str | None], int | None]) -> bool:
     for upload in uploads:
         original = photos.clean_original_name(upload.filename)
         try:
-            filename = photos.save_photo(upload.stream, _upload_dir())
+            filename = photos.save_photo(upload.stream, _upload_dir(), _max_photo_bytes())
         except photos.PhotoError as exc:
             flash(f"{original or 'A file'}: {exc}", "error")
             continue

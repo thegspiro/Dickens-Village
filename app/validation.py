@@ -94,7 +94,9 @@ def _date(form: Mapping[str, str], key: str, errors: dict[str, str]) -> dt.date 
     except ValueError:
         errors[key] = "Enter a date as YYYY-MM-DD."
         return None
-    if value > dt.date.today():
+    # One day of slack: the server's clock (often UTC) can be a day behind the
+    # person's own date late in the evening, or ahead of it in the morning.
+    if value > dt.date.today() + dt.timedelta(days=1):
         errors[key] = "Date cannot be in the future."
         return None
     if value.year < MIN_YEAR:
