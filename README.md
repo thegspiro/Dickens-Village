@@ -102,12 +102,15 @@ Each migration is a pair of files in `migrations/`. Every up migration is idempo
 
 ## Tests
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`. It runs the Python tests against a real MySQL 8.4 (and fails if the integration tests were skipped), validates the catalog CSV, runs the JavaScript tests, and builds the Docker images. To run the same checks locally:
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`. It runs the Python tests against a real MySQL 8.4 (and fails if the integration tests were skipped), validates the catalog CSV, starts the app against MySQL and drives it with Playwright (desktop and phone-sized browsers, including offline editing and sync), runs the JavaScript tests, and builds the Docker images. The browser tests need the server's `MAX_UPLOAD_MB` set to 2. To run the same checks locally:
 
 ```sh
 pip install -r requirements-dev.txt
 python -m pytest                                          # unit tests, no database needed
 node --test tests/js/catalog_lookup.test.js tests/js/offline_model.test.mjs   # browser scripts (Node 18+)
+# Browser end-to-end tests (Playwright) against a running server with a throwaway database:
+pip install -r requirements-e2e.txt && python -m playwright install chromium
+E2E_BASE_URL=http://localhost:8000 E2E_USERNAME=admin E2E_PASSWORD=... python -m pytest tests/e2e
 docker compose -f docker-compose.test.yml run --rm tests  # everything, including MySQL integration tests
 docker compose -f docker-compose.test.yml down -v
 ```

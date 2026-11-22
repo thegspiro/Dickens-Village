@@ -6,5 +6,8 @@ requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: needs a MySQL server (set TEST_DB_HOST)"]
+markers = [
+    "integration: needs a MySQL server (set TEST_DB_HOST)",
+    "e2e: browser tests against a running server (set E2E_BASE_URL)",
+]
 addopts = "-ra"

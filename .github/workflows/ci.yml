@@ -62,6 +62,77 @@ jobs:
         if: hashFiles('app/catalog.py') != ''
         run: python -m app.catalog check
 
+  e2e:
+    name: Browser end-to-end tests (Playwright, real MySQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: dickens_e2e
+          MYSQL_USER: dickens_e2e
+          MYSQL_PASSWORD: dickens_e2e_only
+          MYSQL_ROOT_PASSWORD: dickens_e2e_root_only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -udickens_e2e -pdickens_e2e_only --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: dickens_e2e
+      DB_USER: dickens_e2e
+      DB_PASSWORD: dickens_e2e_only
+      ADMIN_USERNAME: e2e
+      COOKIE_SECURE: "false"
+      MAX_UPLOAD_MB: "2"
+      E2E_BASE_URL: http://127.0.0.1:8000
+      E2E_USERNAME: e2e
+      E2E_MAX_UPLOAD_MB: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies and Chromium
+        run: |
+          pip install -r requirements-e2e.txt
+          python -m playwright install --with-deps chromium
+      - name: Start the app against MySQL (migrations + catalog, as in Docker)
+        run: |
+          password="$(python -c 'import secrets; print(secrets.token_urlsafe(18))')"
+          echo "::add-mask::$password"
+          echo "E2E_PASSWORD=$password" >> "$GITHUB_ENV"
+          export ADMIN_PASSWORD_HASH="$(python -c 'import sys; from werkzeug.security import generate_password_hash as g; print(g(sys.argv[1]))' "$password")"
+          export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          export UPLOAD_DIR="$RUNNER_TEMP/uploads"
+          python -m app.migrate up
+          python -m app.catalog sync
+          nohup gunicorn --bind 127.0.0.1:8000 --workers 2 --timeout 120 \
+            --access-logfile "$RUNNER_TEMP/access.log" --error-logfile "$RUNNER_TEMP/app.log" app.wsgi:app &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null; then echo "App is up"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::The app did not start"; cat "$RUNNER_TEMP/app.log"; exit 1
+      - name: Run browser tests
+        run: python -m pytest tests/e2e -p no:cacheprovider -rs | tee e2e.log
+        shell: bash -o pipefail {0}
+      - name: Make sure the browser tests ran
+        run: |
+          if grep -q "SKIPPED" e2e.log; then echo "::error::Browser tests were skipped"; exit 1; fi
+      - name: Server logs
+        if: always()
+        run: |
+          echo "---- app.log"; cat "$RUNNER_TEMP/app.log" || true
+          echo "---- access.log (last 200 lines)"; tail -n 200 "$RUNNER_TEMP/access.log" || true
+
   javascript:
     name: JavaScript tests
     runs-on: ubuntu-latest
