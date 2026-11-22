@@ -10,6 +10,12 @@
       <label for="q">Search</label>
       <input id="q" name="q" value="{{ filters.q or '' }}" maxlength="100" placeholder="Name, item number or series">
     </div>
+  </div>
+  {% set more_active = filters.category or filters.condition_grade or filters.storage_location or filters.storage_tub
+      or filters.storage_tray or filters.has_extras or filters.on_display or filters.sort != 'name' %}
+  <details class="more-filters"{% if more_active %} open{% endif %}>
+  <summary>More filters</summary>
+  <div class="grid">
     <div>
       <label for="category">Category</label>
       <select id="category" name="category">
@@ -59,6 +65,7 @@
       </select>
     </div>
   </div>
+  </details>
   {% if filters.exact_storage %}<input type="hidden" name="exact_storage" value="yes">{% endif %}
   {% if filters.unstored %}<input type="hidden" name="unstored" value="yes"><p class="muted">Showing only pieces with no storage assigned.</p>{% endif %}
   <button type="submit">Filter</button>
@@ -70,20 +77,20 @@
 
 {% if items %}
 <div class="table-wrap">
-<table>
+<table class="responsive">
   <thead>
     <tr><th>Name</th><th>Category</th><th>Item #</th><th>Condition</th><th>Storage</th><th>Extras</th><th class="num">Est. value</th></tr>
   </thead>
   <tbody>
   {% for item in items %}
     <tr>
-      <td><a href="{{ url_for('main.item_detail', item_id=item.id) }}">{{ item.name }}</a>{% if item.on_display %} <span class="badge">On display</span>{% endif %}</td>
-      <td>{{ CATEGORIES[item.category] }}</td>
-      <td>{{ item.item_number or '' }}</td>
-      <td>{{ condition_badge(item.condition_grade) }}</td>
-      <td>{{ storage_text(item) }}</td>
-      <td>{{ item.extras_count or '' }}</td>
-      <td class="num">{{ item.estimated_value | money }}</td>
+      <td class="primary"><a href="{{ url_for('main.item_detail', item_id=item.id) }}">{{ item.name }}</a>{% if item.on_display %} <span class="badge">On display</span>{% endif %}</td>
+      <td data-label="Category">{{ CATEGORIES[item.category] }}</td>
+      <td data-label="Item #">{{ item.item_number or '' }}</td>
+      <td data-label="Condition">{{ condition_badge(item.condition_grade) }}</td>
+      <td data-label="Storage">{{ storage_text(item) }}</td>
+      <td data-label="Extras">{{ item.extras_count or '' }}</td>
+      <td data-label="Est. value" class="num">{{ item.estimated_value | money }}</td>
     </tr>
   {% endfor %}
   </tbody>

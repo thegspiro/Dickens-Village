@@ -6,7 +6,8 @@ import datetime as dt
 import logging
 import math
 from decimal import Decimal
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import urlencode
 
 from flask import (
@@ -37,6 +38,8 @@ from .repository import PAGE_SIZE
 from .validation import (
     ITEM_BOOL_FIELDS,
     ITEM_COLUMNS,
+    MEASUREMENT_FIELDS,
+    format_inches,
     SORTS,
     STORAGE_COLUMNS,
     parse_extra_form,
@@ -77,6 +80,8 @@ def _row_to_form(row: dict[str, Any]) -> dict[str, str]:
             form[key] = "1" if value else ""
         elif value is None:
             form[key] = ""
+        elif key in MEASUREMENT_FIELDS and value is not None:
+            form[key] = format_inches(value)
         elif isinstance(value, Decimal):
             form[key] = f"{value:.2f}"
         elif isinstance(value, dt.date):
@@ -97,6 +102,20 @@ def _check_catalog_link(data: dict[str, Any], errors: dict[str, str]) -> dict[st
     return entry
 
 
+def _form_from_catalog(row: dict[str, Any]) -> dict[str, str]:
+    """Form values for a new piece, prefilled from a catalog entry (same fields as the lookup script)."""
+    values = {
+        "catalog_id": str(row["id"]),
+        "name": row["name"],
+        "item_number": row["item_number"] or "",
+        "category": row["default_category"] or "",
+        "series": row["series"] or "",
+        "year_introduced": str(row["year_issued"]) if row["year_issued"] else "",
+        "year_retired": str(row["year_retired"]) if row["year_retired"] else "",
+    }
+    return values
+
+
 def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
     def money(value: Any) -> str | None:
         return None if value is None else f"{Decimal(value):.2f}"
@@ -115,6 +134,11 @@ def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
         "srp_cad": money(row["srp_cad"]),
         "category": row["default_category"],
         "parent_name": row["parent_name"],
+        "url": url_for("main.catalog_entry", catalog_id=row["id"]),
+        "photo_count": int(row.get("photo_count") or 0),
+        "thumb_url": (
+            url_for("main.catalog_photo_thumb", photo_id=row["photo_id"]) if row.get("photo_id") else None
+        ),
     }
 
 
@@ -159,6 +183,46 @@ def logout() -> Any:
     check_csrf()
     logout_user()
     return redirect(url_for("main.login"))
+
+
+# -- installable app (PWA) ----------------------------------------------------
+# These are public: the manifest, service worker and offline page hold no
+# collection data, and browsers fetch the manifest without cookies.
+
+
+@bp.get("/manifest.webmanifest")
+def manifest() -> Any:
+    response = send_from_directory(current_app.static_folder, "manifest.webmanifest",
+                                   mimetype="application/manifest+json", max_age=3600)
+    return response
+
+
+@bp.get("/sw.js")
+def service_worker() -> Any:
+    response = send_from_directory(current_app.static_folder, "sw.js", mimetype="text/javascript", max_age=0)
+    # Always check for a new version so updates reach installed phones promptly.
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
+
+@bp.get("/app")
+def offline_app() -> Any:
+    """The phone app shell. Public: it contains no data and is cached for offline use;
+    the app asks the API for data, which needs a login."""
+    response = current_app.make_response(render_template("offline_app.html"))
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@bp.get("/offline")
+def offline() -> Any:
+    return render_template("offline.html")
+
+
+@bp.get("/favicon.ico")
+def favicon() -> Any:
+    return send_from_directory(current_app.static_folder, "icons/favicon-32.png", mimetype="image/png", max_age=86400)
 
 
 @bp.get("/healthz")
@@ -222,9 +286,15 @@ def item_new() -> Any:
             ),
             400,
         )
-    preset = {"category": request.args.get("category", "")}
+    preset: dict[str, str] = {"category": request.args.get("category", "")}
+    catalog = None
+    catalog_id = parse_positive_int(request.args.get("catalog_id"))
+    if catalog_id is not None:
+        catalog = repo().get_catalog_item(catalog_id)
+        if catalog is not None:
+            preset.update(_form_from_catalog(catalog))
     return render_template(
-        "item_form.html", form=preset, errors={}, item=None, catalog=None,
+        "item_form.html", form=preset, errors={}, item=None, catalog=catalog,
         suggestions=_storage_suggestions(),
     )
 
@@ -242,6 +312,7 @@ def item_detail(item_id: int) -> Any:
         link_candidates=r.link_candidates(item),
         photos=r.list_photos(item_id),
         catalog=r.get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None,
+        catalog_photos=r.list_catalog_photos(item["catalog_id"]) if item.get("catalog_id") else [],
         extra_form={},
         extra_errors={},
     )
@@ -311,6 +382,7 @@ def extra_add(item_id: int) -> Any:
                 link_candidates=r.link_candidates(item),
                 photos=r.list_photos(item_id),
                 catalog=r.get_catalog_item(item["catalog_id"]) if item.get("catalog_id") else None,
+                catalog_photos=r.list_catalog_photos(item["catalog_id"]) if item.get("catalog_id") else [],
                 extra_form=request.form,
                 extra_errors=errors,
             ),
@@ -386,29 +458,62 @@ def link_delete(item_id: int, other_id: int) -> Any:
 # -- photos ------------------------------------------------------------------
 
 
+MAX_PHOTOS_PER_UPLOAD = 20
+
+
+def _store_uploads(add_record: Callable[[str, str | None], int | None]) -> bool:
+    """Save every file in the "photo" field and record each with add_record.
+
+    Flashes one summary message plus one message per rejected file. Returns
+    False if add_record reported that the parent row no longer exists.
+    """
+    uploads = [f for f in request.files.getlist("photo") if f and f.filename]
+    if not uploads:
+        flash("Choose one or more photos to upload.", "error")
+        return True
+    if len(uploads) > MAX_PHOTOS_PER_UPLOAD:
+        flash(f"Upload at most {MAX_PHOTOS_PER_UPLOAD} photos at a time.", "error")
+        return True
+    added = 0
+    for upload in uploads:
+        original = photos.clean_original_name(upload.filename)
+        try:
+            filename = photos.save_photo(upload.stream, _upload_dir())
+        except photos.PhotoError as exc:
+            flash(f"{original or 'A file'}: {exc}", "error")
+            continue
+        try:
+            record_id = add_record(filename, original)
+        except Exception:
+            photos.delete_photo_file(_upload_dir(), filename)  # don't leave an orphaned file
+            raise
+        if record_id is None:
+            photos.delete_photo_file(_upload_dir(), filename)
+            return False
+        added += 1
+    if added:
+        flash(f"Added {added} photo{'' if added == 1 else 's'}.", "success")
+    return True
+
+
+def _send_photo(filename: str, thumb: bool) -> Any:
+    if not photos.FILENAME_RE.match(filename):
+        abort(404)
+    name = filename
+    if thumb and (Path(_upload_dir()) / photos.thumb_name(filename)).is_file():
+        name = photos.thumb_name(filename)  # photos uploaded before thumbnails existed fall back to full size
+    response = send_from_directory(_upload_dir(), name, mimetype="image/jpeg", max_age=3600)
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
+
 @bp.post("/items/<int:item_id>/photos")
 @login_required
 def photo_add(item_id: int) -> Any:
     check_csrf()
     _item_or_404(item_id)
-    upload = request.files.get("photo")
-    if upload is None or not upload.filename:
-        flash("Choose a photo to upload.", "error")
-        return redirect(url_for("main.item_detail", item_id=item_id) + "#photos")
-    try:
-        filename = photos.save_photo(upload.stream, _upload_dir())
-    except photos.PhotoError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("main.item_detail", item_id=item_id) + "#photos")
-    try:
-        photo_id = repo().add_photo(item_id, filename, photos.clean_original_name(upload.filename))
-    except Exception:
-        photos.delete_photo_file(_upload_dir(), filename)  # don't leave an orphaned file
-        raise
-    if photo_id is None:
-        photos.delete_photo_file(_upload_dir(), filename)
+    if not _store_uploads(lambda filename, original: repo().add_photo(item_id, filename, original)):
         abort(404)
-    flash("Photo added.", "success")
     return redirect(url_for("main.item_detail", item_id=item_id) + "#photos")
 
 
@@ -416,11 +521,18 @@ def photo_add(item_id: int) -> Any:
 @login_required
 def photo_file(photo_id: int) -> Any:
     photo = repo().get_photo(photo_id)
-    if photo is None or not photos.FILENAME_RE.match(photo["filename"]):
+    if photo is None:
         abort(404)
-    response = send_from_directory(_upload_dir(), photo["filename"], mimetype="image/jpeg", max_age=3600)
-    response.headers["Cache-Control"] = "private, max-age=3600"
-    return response
+    return _send_photo(photo["filename"], thumb=False)
+
+
+@bp.get("/photos/<int:photo_id>/thumb")
+@login_required
+def photo_thumb(photo_id: int) -> Any:
+    photo = repo().get_photo(photo_id)
+    if photo is None:
+        abort(404)
+    return _send_photo(photo["filename"], thumb=True)
 
 
 @bp.post("/photos/<int:photo_id>/delete")
@@ -446,6 +558,71 @@ def catalog_search() -> Any:
     response = jsonify({"results": [_catalog_json(row) for row in results]})
     response.headers["Cache-Control"] = "private, no-store"
     return response
+
+
+@bp.get("/catalog")
+@login_required
+def catalog_browse() -> Any:
+    query = " ".join(request.args.get("q", "").split())[:100]
+    results = repo().search_catalog(query, limit=100) if len(query) >= 2 else []
+    return render_template("catalog.html", query=query, results=results)
+
+
+@bp.get("/catalog/<int:catalog_id>")
+@login_required
+def catalog_entry(catalog_id: int) -> Any:
+    r = repo()
+    entry = r.get_catalog_item(catalog_id)
+    if entry is None:
+        abort(404)
+    return render_template(
+        "catalog_entry.html",
+        entry=entry,
+        photos=r.list_catalog_photos(catalog_id),
+        owned=r.items_for_catalog(catalog_id),
+        max_photos=MAX_PHOTOS_PER_UPLOAD,
+    )
+
+
+@bp.post("/catalog/<int:catalog_id>/photos")
+@login_required
+def catalog_photo_add(catalog_id: int) -> Any:
+    check_csrf()
+    if repo().get_catalog_item(catalog_id) is None:
+        abort(404)
+    if not _store_uploads(lambda filename, original: repo().add_catalog_photo(catalog_id, filename, original)):
+        abort(404)
+    return redirect(url_for("main.catalog_entry", catalog_id=catalog_id) + "#photos")
+
+
+@bp.get("/catalog-photos/<int:photo_id>")
+@login_required
+def catalog_photo_file(photo_id: int) -> Any:
+    photo = repo().get_catalog_photo(photo_id)
+    if photo is None:
+        abort(404)
+    return _send_photo(photo["filename"], thumb=False)
+
+
+@bp.get("/catalog-photos/<int:photo_id>/thumb")
+@login_required
+def catalog_photo_thumb(photo_id: int) -> Any:
+    photo = repo().get_catalog_photo(photo_id)
+    if photo is None:
+        abort(404)
+    return _send_photo(photo["filename"], thumb=True)
+
+
+@bp.post("/catalog-photos/<int:photo_id>/delete")
+@login_required
+def catalog_photo_delete(photo_id: int) -> Any:
+    check_csrf()
+    photo = repo().delete_catalog_photo(photo_id)
+    if photo is None:
+        abort(404)
+    photos.delete_photo_file(_upload_dir(), photo["filename"])
+    flash("Photo removed.", "success")
+    return redirect(url_for("main.catalog_entry", catalog_id=photo["catalog_id"]) + "#photos")
 
 
 # -- summaries ---------------------------------------------------------------

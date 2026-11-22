@@ -2,21 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#7a1f2b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Dickens Village">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="{{ url_for('main.manifest') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='icons/favicon-32.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
   <title>{% block title %}Collection{% endblock %} · Dickens Village Tracker</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   {% block scripts %}{% endblock %}
 </head>
-<body>
+<body{% if current_user() %} data-logged-in="1"{% endif %}>
   <header class="site-header">
     <a class="brand" href="{{ url_for('main.item_list') }}">Dickens Village Tracker</a>
     {% if current_user() %}
-    <nav aria-label="Main">
+    <button type="button" id="nav-toggle" class="nav-toggle" aria-controls="site-nav" aria-expanded="false" hidden>Menu</button>
+    <nav id="site-nav" aria-label="Main">
       <a href="{{ url_for('main.item_list') }}">Collection</a>
       <a href="{{ url_for('main.storage') }}">Storage</a>
+      <a href="{{ url_for('main.catalog_browse') }}">Catalog</a>
+      <a href="{{ url_for('main.offline_app') }}">Phone app</a>
       <a href="{{ url_for('main.summary') }}">Summary</a>
       <a class="button" href="{{ url_for('main.item_new') }}">Add piece</a>
-      <form method="post" action="{{ url_for('main.logout') }}" class="inline">
+      <form method="post" action="{{ url_for('main.logout') }}" class="inline" id="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="link">Log out</button>
       </form>

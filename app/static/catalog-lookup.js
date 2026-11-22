@@ -26,6 +26,11 @@
     return parts.join(" · ");
   }
 
+  /* Only same-site paths are used as image sources. */
+  function isLocalUrl(url) {
+    return typeof url === "string" && url.charAt(0) === "/" && url.charAt(1) !== "/" && url.indexOf("\\") === -1;
+  }
+
   /* Second line of a suggestion: which list it is from, plus any notes. */
   function detailLine(r) {
     var parts = [r.list === "accessories" ? "Accessories list" : "Lighted list"];
@@ -93,11 +98,28 @@
 
     function render() {
       while (list.firstChild) list.removeChild(list.firstChild);
+      var anyThumbs = results.some(function (r) { return isLocalUrl(r.thumb_url); });
       results.forEach(function (r, i) {
         var li = doc.createElement("li");
         li.id = "catalog-option-" + i;
         li.setAttribute("role", "option");
         li.setAttribute("aria-selected", "false");
+        if (anyThumbs) {
+          // Keep rows aligned: a blank square where an entry has no photo yet.
+          li.className = "has-thumb";
+          if (isLocalUrl(r.thumb_url)) {
+            var img = doc.createElement("img");
+            img.className = "combo-thumb";
+            img.alt = "";
+            img.loading = "lazy";
+            img.src = r.thumb_url;
+            li.appendChild(img);
+          } else {
+            var blank = doc.createElement("span");
+            blank.className = "combo-thumb-empty";
+            li.appendChild(blank);
+          }
+        }
         // First line: item number, then the name in bold so pieces that
         // share a number are easy to tell apart.
         var title = doc.createElement("span");
@@ -232,7 +254,7 @@
     }
   }
 
-  var api = { describe: describe, detailLine: detailLine, fieldValues: fieldValues, formatYears: formatYears, init: init };
+  var api = { describe: describe, detailLine: detailLine, isLocalUrl: isLocalUrl, fieldValues: fieldValues, formatYears: formatYears, init: init };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else if (typeof document !== "undefined") {

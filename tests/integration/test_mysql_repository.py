@@ -26,7 +26,7 @@ from app.validation import parse_extra_form, parse_item_form, parse_list_filters
 pytestmark = pytest.mark.integration
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
-TABLES = ("item_photos", "item_links", "item_extras", "items", "catalog_items")
+TABLES = ("item_photos", "item_links", "item_extras", "items", "catalog_photos", "catalog_items")
 CATALOG_DIR = Path(__file__).resolve().parents[2] / "data" / "catalog"
 
 
@@ -99,6 +99,18 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0005_sync"
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM items LIKE 'version'")
+            assert cur.fetchone() is None
+        assert migrate.migrate_down(conn, migrations) == "0004_measurements"
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM items LIKE 'height_in'")
+            assert cur.fetchone() is None
+        assert migrate.migrate_down(conn, migrations) == "0003_catalog_photos"
+        with conn.cursor() as cur:
+            cur.execute("SHOW TABLES LIKE 'catalog_photos'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0002_catalog"
         with conn.cursor() as cur:
             cur.execute("SHOW COLUMNS FROM items LIKE 'catalog_id'")
@@ -109,7 +121,8 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'items'")
             assert cur.fetchone() is None
-        assert migrate.migrate_up(conn, migrations) == ["0001_initial", "0002_catalog"]
+        assert migrate.migrate_up(conn, migrations) == [
+            "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -311,3 +324,134 @@ def test_item_catalog_link_and_on_delete_set_null(db_config, repo):
     finally:
         conn.close()
     assert repo.get_item(item_id)["catalog_id"] is None
+
+
+def test_catalog_photos_and_linked_items(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    entry = repo.search_catalog("56.65161")[0]
+    assert entry["photo_id"] is None and entry["photo_count"] == 0
+    first = repo.add_catalog_photo(entry["id"], "a" * 32 + ".jpg", "front.jpg")
+    repo.add_catalog_photo(entry["id"], "b" * 32 + ".jpg", None)
+    assert repo.add_catalog_photo(99_999_999, "c" * 32 + ".jpg", None) is None
+    found = repo.search_catalog("56.65161")[0]
+    assert found["photo_id"] == first and found["photo_count"] == 2
+    assert repo.get_catalog_item(entry["id"])["photo_count"] == 2
+    assert [p["original_name"] for p in repo.list_catalog_photos(entry["id"])] == ["front.jpg", None]
+    assert repo.get_catalog_photo(first)["catalog_id"] == entry["id"]
+    assert repo.delete_catalog_photo(first)["filename"] == "a" * 32 + ".jpg"
+    assert repo.delete_catalog_photo(first) is None
+
+    data = item(name="My church")
+    data["catalog_id"] = entry["id"]
+    item_id = repo.create_item(data)
+    assert [i["id"] for i in repo.items_for_catalog(entry["id"])] == [item_id]
+
+    conn = connect(db_config)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM catalog_items WHERE id = %s", (entry["id"],))
+        conn.commit()
+    finally:
+        conn.close()
+    assert repo.list_catalog_photos(entry["id"]) == []  # ON DELETE CASCADE
+
+
+def test_measurements_roundtrip_and_check(repo):
+    item_id = repo.create_item(item(height_in="7 1/8", box_depth_in="11.75"))
+    row = repo.get_item(item_id)
+    assert row["height_in"] == Decimal("7.125") and row["box_depth_in"] == Decimal("11.750")
+    assert row["width_in"] is None
+    bad = item()
+    bad["depth_in"] = Decimal("-1")
+    with pytest.raises(pymysql.err.OperationalError):
+        repo.create_item(bad)
+
+
+# -- offline sync support ---------------------------------------------------------
+
+UUID_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+UUID_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def test_versions_bump_on_every_update(repo):
+    item_id = repo.create_item(item())
+    assert repo.get_item(item_id)["version"] == 1
+    repo.update_item(item_id, item(name="Renamed"))
+    assert repo.get_item(item_id)["version"] == 2
+    extra, _ = parse_extra_form({"description": "Bulb"})
+    extra_id = repo.add_extra(item_id, extra)
+    repo.update_extra(item_id, extra_id, extra)
+    assert repo.get_extra(item_id, extra_id)["version"] == 2
+
+
+def test_create_from_client_is_idempotent(repo):
+    first, created = repo.create_item_from_client(item(name="Carolers"), UUID_A)
+    again, created_again = repo.create_item_from_client(item(name="Carolers"), UUID_A)
+    assert created and not created_again and first == again
+    assert repo.list_items(filters())[1] == 1
+    assert repo.get_item_by_client_uuid(UUID_A)["id"] == first
+
+
+def test_patch_item_paths(repo):
+    item_id = repo.create_item(item(storage_tub="1"))
+    seen = {}
+
+    def conflict(row):
+        seen["tub"] = row["storage_tub"]
+        return "conflict", ["details"]
+
+    status, payload, row = repo.patch_item(item_id, conflict)
+    assert (status, payload, row["version"], seen["tub"]) == ("conflict", ["details"], 1, "1")
+
+    def ok(row):
+        return "ok", item(storage_tub="2")
+
+    status, _, row = repo.patch_item(item_id, ok)
+    assert status == "ok" and row["storage_tub"] == "2" and row["version"] == 2
+    assert repo.patch_item(999_999, ok)[0] == "missing"
+
+
+def test_extras_and_photos_from_client(repo):
+    item_id = repo.create_item(item())
+    extra, _ = parse_extra_form({"description": "Light cord", "quantity": "2"})
+    extra_id, created = repo.add_extra_from_client(item_id, extra, UUID_B)
+    assert created and repo.add_extra_from_client(item_id, extra, UUID_B) == (extra_id, False)
+    assert repo.add_extra_from_client(999_999, extra, "cccccccc-cccc-4ccc-8ccc-cccccccccccc") == (None, False)
+    status, _, row = repo.patch_extra(item_id, extra_id, lambda r: ("ok", {**extra, "quantity": 3}))
+    assert status == "ok" and row["quantity"] == 3 and row["version"] == 2
+
+    photo_id = repo.add_photo(item_id, "d" * 32 + ".jpg", "x.jpg", UUID_A)
+    assert repo.get_photo_by_client_uuid(UUID_A)["id"] == photo_id
+    with pytest.raises(pymysql.err.IntegrityError):
+        repo.add_photo(item_id, "e" * 32 + ".jpg", "y.jpg", UUID_A)
+
+
+def test_snapshot_and_etag(repo):
+    empty = repo.snapshot_etag()
+    item_id = repo.create_item(item())
+    after_create = repo.snapshot_etag()
+    assert after_create != empty
+    repo.update_item(item_id, item(name="Renamed"))
+    assert repo.snapshot_etag() != after_create
+    data = repo.snapshot()
+    assert [i["name"] for i in data["items"]] == ["Renamed"] and data["extras"] == [] and data["photos"] == []
+    before_delete = repo.snapshot_etag()
+    repo.delete_item(item_id)
+    assert repo.snapshot_etag() != before_delete
+
+
+def test_catalog_all_and_etag(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    rows = repo.catalog_all()
+    assert len(rows) == 760 and "photo_id" in rows[0]
+    tag = repo.catalog_etag()
+    repo.add_catalog_photo(rows[0]["id"], "f" * 32 + ".jpg", None)
+    assert repo.catalog_etag() != tag

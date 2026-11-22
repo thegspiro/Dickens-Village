@@ -29,6 +29,7 @@ class FakeRepository:
         self.links: set[tuple[int, int]] = set()
         self.photos: dict[int, dict[str, Any]] = {}
         self.catalog: dict[int, dict[str, Any]] = {}
+        self.catalog_photos: dict[int, dict[str, Any]] = {}
         self._ids = itertools.count(1)
         self.closed = 0
 
@@ -73,14 +74,56 @@ class FakeRepository:
     def create_item(self, data: dict[str, Any]) -> int:
         new_id = next(self._ids)
         now = dt.datetime(2026, 11, 19, 12, 0)
-        self.items[new_id] = {**data, "id": new_id, "created_at": now, "updated_at": now}
+        self.items[new_id] = {**data, "id": new_id, "created_at": now, "updated_at": now, "version": 1,
+                              "client_uuid": None}
         return new_id
 
     def update_item(self, item_id: int, data: dict[str, Any]) -> bool:
         if item_id not in self.items:
             return False
         self.items[item_id].update(data)
+        self.items[item_id]["version"] += 1
         return True
+
+    # sync support
+    def get_item_by_client_uuid(self, client_uuid: str) -> dict[str, Any] | None:
+        return next((dict(i) for i in self.items.values() if i.get("client_uuid") == client_uuid), None)
+
+    def create_item_from_client(self, data: dict[str, Any], client_uuid: str) -> tuple[int, bool]:
+        existing = self.get_item_by_client_uuid(client_uuid)
+        if existing:
+            return existing["id"], False
+        new_id = self.create_item(data)
+        self.items[new_id]["client_uuid"] = client_uuid
+        return new_id, True
+
+    def patch_item(self, item_id, resolve):
+        row = self.items.get(item_id)
+        if row is None:
+            return "missing", None, None
+        status, payload = resolve(dict(row))
+        if status != "ok":
+            return status, payload, dict(row)
+        self.update_item(item_id, payload)
+        return "ok", None, dict(self.items[item_id])
+
+    def snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        return {"items": [dict(i) for i in self.items.values()],
+                "extras": [dict(e) for e in self.extras.values()],
+                "photos": [{"id": p["id"], "item_id": p["item_id"], "client_uuid": p.get("client_uuid")}
+                           for p in self.photos.values()]}
+
+    def snapshot_etag(self) -> str:
+        return "/".join(str(x) for x in (
+            len(self.items), sum(i["version"] for i in self.items.values()), max(self.items, default=0),
+            len(self.extras), sum(e.get("version", 1) for e in self.extras.values()), max(self.extras, default=0),
+            len(self.photos), sum(self.photos)))
+
+    def catalog_all(self) -> list[dict[str, Any]]:
+        return [self._catalog_with_photos(r) for r in self.catalog.values()]
+
+    def catalog_etag(self) -> str:
+        return f"{len(self.catalog)}/{len(self.catalog_photos)}/{sum(self.catalog_photos)}"
 
     def delete_item(self, item_id: int) -> list[str] | None:
         if item_id not in self.items:
@@ -106,14 +149,35 @@ class FakeRepository:
         if item_id not in self.items:
             return None
         new_id = next(self._ids)
-        self.extras[new_id] = {**data, "id": new_id, "item_id": item_id}
+        self.extras[new_id] = {**data, "id": new_id, "item_id": item_id, "version": 1, "client_uuid": None}
         return new_id
 
     def update_extra(self, item_id: int, extra_id: int, data: dict[str, Any]) -> bool:
         if not self.get_extra(item_id, extra_id):
             return False
         self.extras[extra_id].update(data)
+        self.extras[extra_id]["version"] += 1
         return True
+
+    def add_extra_from_client(self, item_id, data, client_uuid):
+        existing = next((e for e in self.extras.values() if e.get("client_uuid") == client_uuid), None)
+        if existing:
+            return existing["id"], False
+        new_id = self.add_extra(item_id, data)
+        if new_id is None:
+            return None, False
+        self.extras[new_id]["client_uuid"] = client_uuid
+        return new_id, True
+
+    def patch_extra(self, item_id, extra_id, resolve):
+        row = self.get_extra(item_id, extra_id)
+        if row is None:
+            return "missing", None, None
+        status, payload = resolve(dict(row))
+        if status != "ok":
+            return status, payload, dict(row)
+        self.update_extra(item_id, extra_id, payload)
+        return "ok", None, dict(self.extras[extra_id])
 
     def delete_extra(self, item_id: int, extra_id: int) -> bool:
         if not self.get_extra(item_id, extra_id):
@@ -155,12 +219,17 @@ class FakeRepository:
     def get_photo(self, photo_id: int) -> dict[str, Any] | None:
         return self.photos.get(photo_id)
 
-    def add_photo(self, item_id: int, filename: str, original_name: str | None) -> int | None:
+    def add_photo(self, item_id: int, filename: str, original_name: str | None,
+                  client_uuid: str | None = None) -> int | None:
         if item_id not in self.items:
             return None
         new_id = next(self._ids)
-        self.photos[new_id] = {"id": new_id, "item_id": item_id, "filename": filename, "original_name": original_name}
+        self.photos[new_id] = {"id": new_id, "item_id": item_id, "filename": filename,
+                               "original_name": original_name, "client_uuid": client_uuid}
         return new_id
+
+    def get_photo_by_client_uuid(self, client_uuid: str) -> dict[str, Any] | None:
+        return next((p for p in self.photos.values() if p.get("client_uuid") == client_uuid), None)
 
     def delete_photo(self, photo_id: int) -> dict[str, Any] | None:
         return self.photos.pop(photo_id, None)
@@ -188,10 +257,35 @@ class FakeRepository:
             if q in number or q in row["name"].lower() or (len(digits) >= 2 and digits in number.replace(".", "")):
                 rank = 0 if number == q else 1 if number.startswith(q) else 2 if q in number else 3
                 hits.append((rank, number, row["id"], row))
-        return [h[3] for h in sorted(hits, key=lambda h: h[:3])][:limit]
+        return [self._catalog_with_photos(h[3]) for h in sorted(hits, key=lambda h: h[:3])][:limit]
+
+    def _catalog_with_photos(self, row: dict[str, Any]) -> dict[str, Any]:
+        ids = sorted(p["id"] for p in self.catalog_photos.values() if p["catalog_id"] == row["id"])
+        return {**row, "photo_id": ids[0] if ids else None, "photo_count": len(ids)}
 
     def get_catalog_item(self, catalog_id: int) -> dict[str, Any] | None:
-        return self.catalog.get(catalog_id)
+        row = self.catalog.get(catalog_id)
+        return self._catalog_with_photos(row) if row else None
+
+    def list_catalog_photos(self, catalog_id: int) -> list[dict[str, Any]]:
+        return sorted((p for p in self.catalog_photos.values() if p["catalog_id"] == catalog_id), key=lambda p: p["id"])
+
+    def get_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
+        return self.catalog_photos.get(photo_id)
+
+    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None) -> int | None:
+        if catalog_id not in self.catalog:
+            return None
+        new_id = next(self._ids)
+        self.catalog_photos[new_id] = {"id": new_id, "catalog_id": catalog_id, "filename": filename,
+                                       "original_name": original_name}
+        return new_id
+
+    def delete_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
+        return self.catalog_photos.pop(photo_id, None)
+
+    def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
+        return sorted((i for i in self.items.values() if i.get("catalog_id") == catalog_id), key=lambda i: i["name"])
 
     def storage_summary(self) -> list[dict[str, Any]]:
         counts: dict[tuple, int] = {}

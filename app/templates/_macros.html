@@ -43,3 +43,11 @@
   {% if item.storage_tray %}{% set _ = parts.append('Tray ' ~ item.storage_tray) %}{% endif %}
   {% if parts %}{{ parts | join(' › ') }}{% else %}<span class="muted">Not assigned</span>{% endif %}
 {%- endmacro %}
+
+{% macro dims(h, w, d) -%}
+  {%- set parts = [] -%}
+  {%- if h %}{% set _ = parts.append((h | inches) ~ '″ H') %}{% endif -%}
+  {%- if w %}{% set _ = parts.append((w | inches) ~ '″ W') %}{% endif -%}
+  {%- if d %}{% set _ = parts.append((d | inches) ~ '″ D') %}{% endif -%}
+  {{ parts | join(' × ') }}
+{%- endmacro %}

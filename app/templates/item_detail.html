@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import condition_badge, storage_text, text, select, field_error %}
+{% from "_macros.html" import condition_badge, storage_text, text, select, field_error, dims %}
 {% block title %}{{ item.name }}{% endblock %}
 {% block content %}
 <div class="title-row">
@@ -18,7 +18,7 @@
       {% if catalog %}
       <dt>Catalog listing</dt>
       <dd>
-        {{ catalog.item_number or 'No number' }} · {{ catalog.name }}{% if catalog.parent_name %} <span class="muted">(part of “{{ catalog.parent_name }}”)</span>{% endif %}<br>
+        <a href="{{ url_for('main.catalog_entry', catalog_id=catalog.id) }}">{{ catalog.item_number or 'No number' }} · {{ catalog.name }}</a>{% if catalog.parent_name %} <span class="muted">(part of “{{ catalog.parent_name }}”)</span>{% endif %}<br>
         <span class="muted">{{ 'Lighted' if catalog.list_name == 'lighted' else 'Accessories' }} list · {{ catalog.year_issued or '?' }}–{{ 'Current' if catalog.is_current else (catalog.year_retired or '?') }}</span>
         {% if catalog.details %}<br><span class="muted">{{ catalog.details }}</span>{% endif %}
       </dd>
@@ -29,6 +29,12 @@
       <dt>Condition</dt><dd>{{ condition_badge(item.condition_grade) }}{% if item.condition_checked_on %} <span class="muted">checked {{ item.condition_checked_on | nicedate }}</span>{% endif %}</dd>
       {% if item.condition_notes %}<dt>Condition notes</dt><dd class="pre">{{ item.condition_notes }}</dd>{% endif %}
       <dt>Box / sleeve</dt><dd>{{ 'Original box' if item.has_original_box else 'No box' }} · {{ 'Sleeve' if item.has_sleeve else 'No sleeve' }}</dd>
+      {% if item.height_in or item.width_in or item.depth_in %}
+      <dt>Size</dt><dd>{{ dims(item.height_in, item.width_in, item.depth_in) }}</dd>
+      {% endif %}
+      {% if item.box_height_in or item.box_width_in or item.box_depth_in %}
+      <dt>Box size</dt><dd>{{ dims(item.box_height_in, item.box_width_in, item.box_depth_in) }}</dd>
+      {% endif %}
       <dt>Storage</dt><dd>{{ storage_text(item) }}{% if item.on_display %} <span class="badge">On display</span>{% endif %}</dd>
       <dt>Purchased</dt><dd>{{ item.purchase_date | nicedate or '—' }}{% if item.purchased_from %} from {{ item.purchased_from }}{% endif %}</dd>
       <dt>Price paid</dt><dd>{{ item.price_paid | money or '—' }}</dd>
@@ -43,7 +49,7 @@
     <div class="photos">
       {% for p in photos %}
       <figure>
-        <a href="{{ url_for('main.photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.photo_file', photo_id=p.id) }}" alt="Photo of {{ item.name }}" loading="lazy"></a>
+        <a href="{{ url_for('main.photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.photo_thumb', photo_id=p.id) }}" alt="Photo of {{ item.name }}" loading="lazy"></a>
         <form method="post" action="{{ url_for('main.photo_delete', photo_id=p.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="link danger">Remove</button>
@@ -51,13 +57,29 @@
       </figure>
       {% endfor %}
     </div>
-    {% else %}<p class="muted">No photos yet.</p>{% endif %}
+    {% else %}<p class="muted">No photos of your piece yet.</p>{% endif %}
     <form method="post" action="{{ url_for('main.photo_add', item_id=item.id) }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label for="photo">Add a photo (JPEG, PNG or WebP)</label>
-      <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" required>
+      <p class="label">Add photos (JPEG, PNG or WebP; pick several at once if you like)</p>
+      <div class="photo-pickers">
+        <label class="button" for="photo-camera">Take a photo</label>
+        <input id="photo-camera" class="visually-hidden-file" type="file" name="photo" accept="image/jpeg,image/png,image/webp" capture="environment">
+        <input id="photo" type="file" name="photo" accept="image/jpeg,image/png,image/webp" multiple aria-label="Choose photos">
+      <span class="hint picker-status" aria-live="polite"></span>
+      </div>
       <button type="submit">Upload</button>
     </form>
+    {% if catalog %}
+    <h3>Catalog reference photos</h3>
+    {% if catalog_photos %}
+    <div class="photos">
+      {% for p in catalog_photos %}
+      <figure><a href="{{ url_for('main.catalog_photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.catalog_photo_thumb', photo_id=p.id) }}" alt="Catalog photo of {{ catalog.name }}" loading="lazy"></a></figure>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">None yet.</p>{% endif %}
+    <p><a href="{{ url_for('main.catalog_entry', catalog_id=catalog.id) }}#photos">Manage catalog photos</a></p>
+    {% endif %}
   </section>
 </div>
 
@@ -66,15 +88,15 @@
   <p class="muted">Pieces that go with this item, such as light cords, bulbs, signs or small attached accessories.</p>
   {% if extras %}
   <div class="table-wrap">
-  <table>
+  <table class="responsive">
     <thead><tr><th>Extra</th><th class="num">Qty</th><th>Condition</th><th>Notes</th><th></th></tr></thead>
     <tbody>
     {% for e in extras %}
       <tr>
-        <td>{{ e.description }}</td>
-        <td class="num">{{ e.quantity }}</td>
-        <td>{{ condition_badge(e.condition_grade) }}</td>
-        <td>{{ e.notes or '' }}</td>
+        <td class="primary">{{ e.description }}</td>
+        <td data-label="Qty" class="num">{{ e.quantity }}</td>
+        <td data-label="Condition">{{ condition_badge(e.condition_grade) }}</td>
+        <td data-label="Notes">{{ e.notes or '' }}</td>
         <td class="row-actions">
           <a href="{{ url_for('main.extra_edit', item_id=item.id, extra_id=e.id) }}">Edit</a>
           <form method="post" action="{{ url_for('main.extra_delete', item_id=item.id, extra_id=e.id) }}" class="inline">

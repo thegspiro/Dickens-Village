@@ -202,6 +202,7 @@ def test_search_result_shape(logged_in, seeded):
         "id": seeded["acc"], "list": "accessories", "item_number": "56.58539", "name": "The Big Prize Turkey",
         "details": None, "series": "A Christmas Carol", "year_issued": 2001, "year_retired": 2008,
         "is_current": False, "srp_usd": "27.50", "srp_cad": "44.00", "category": "accessory", "parent_name": None,
+        "url": f"/catalog/{seeded['acc']}", "photo_count": 0, "thumb_url": None,
     }
 
 
