@@ -151,7 +151,8 @@ function runSync() {
   return sync();
 }
 function syncSoon() {
-  refreshPill();
+  if (navigator.onLine) renderPill(Object.assign({}, lastStatus, { state: "syncing" }));
+  else refreshPill();
   clearTimeout(syncTimer);
   syncTimer = setTimeout(runSync, 800);
 }
@@ -288,8 +289,14 @@ async function addPhotos(itemKey, files) {
   for (var i = 0; i < list.length; i++) {
     var f = list[i];
     var id = uuid();
-    await db.put("photos", { key: "p-" + id, client_uuid: id, itemKey: itemKey, blob: f, name: f.name || "photo.jpg",
-      error: null, created: Date.now() });
+    try {
+      await db.put("photos", { key: "p-" + id, client_uuid: id, itemKey: itemKey, blob: f, name: f.name || "photo.jpg",
+        error: null, created: Date.now() });
+    } catch (err) {
+      window.alert("This phone is out of storage space for the app, so " + (list.length - i) +
+        " photo(s) weren't saved. Sync or remove waiting photos, then try again.");
+      break;
+    }
   }
   await countPending();
   route();
@@ -533,7 +540,8 @@ async function attentionView() {
           h("label", { class: "check" }, h("input", { type: "radio", name: name, value: "theirs" }),
             " Other device: ", h("strong", null, displayValue(c.field, c.theirs))));
       }),
-      h("button", { type: "submit" }, "Save my choices"));
+      h("button", { type: "submit" }, "Save my choices"), " ",
+      discardButton(rec, store, store === "items" ? m.ITEM_FIELDS : m.EXTRA_FIELDS));
     form.addEventListener("submit", async function (e) {
       e.preventDefault();
       var picks = {};
@@ -549,20 +557,48 @@ async function attentionView() {
     return form;
   }
 
-  function errorCard(rec, title, href) {
+  function discardButton(rec, store, fields) {
+    return h("button", { type: "button", class: "danger", onclick: async function () {
+      var what = rec.id == null ? "This deletes it from the phone; it was never saved to the server."
+        : "The phone goes back to the server's version of it.";
+      if (!window.confirm("Discard your unsynced changes? " + what)) return;
+      var fresh = await db.get(store, rec.key);
+      var kept = fresh && m.discardChanges(fresh, fields);
+      // Fetch the full server copy next time even if nothing changed there, so a
+      // piece that was deleted elsewhere disappears from the phone too.
+      await db.setMeta("snapshotEtag", null);
+      if (kept) await db.put(store, kept);
+      else if (fresh) {
+        await db.del(store, rec.key);
+        if (store === "items") { // its unsent extras and photos go with it
+          var ex = await db.byItem("extras", rec.key);
+          await db.apply("extras", [], ex.map(function (e) { return e.key; }));
+          var ph = await db.byItem("photos", rec.key);
+          await db.apply("photos", [], ph.map(function (p) { return p.key; }));
+        }
+      }
+      await refreshPill();
+      syncSoon();
+      route();
+    } }, "Discard my changes");
+  }
+
+  function errorCard(rec, title, href, store, fields) {
     return h("div", { class: "card" }, h("h2", null, title), statusBanner(rec, "item"),
-      h("a", { class: "button", href: href }, "Edit to fix"));
+      h("a", { class: "button", href: href }, "Edit to fix"), " ", discardButton(rec, store, fields));
   }
 
   var parts = [];
   items.forEach(function (r) {
     var title = r.local.name || "(no name)";
-    parts.push(r.conflict ? conflictForm(r, "items", title) : errorCard(r, title, "#/edit/" + encodeURIComponent(r.key)));
+    parts.push(r.conflict ? conflictForm(r, "items", title)
+      : errorCard(r, title, "#/edit/" + encodeURIComponent(r.key), "items", m.ITEM_FIELDS));
   });
   extras.forEach(function (r) {
     var title = "Extra “" + r.local.description + "” on " + (itemNames[r.itemKey] || "a piece");
     parts.push(r.conflict ? conflictForm(r, "extras", title)
-      : errorCard(r, title, "#/piece/" + encodeURIComponent(r.itemKey) + "/extra/" + encodeURIComponent(r.key)));
+      : errorCard(r, title, "#/piece/" + encodeURIComponent(r.itemKey) + "/extra/" + encodeURIComponent(r.key),
+        "extras", m.EXTRA_FIELDS));
   });
   photos.forEach(function (p) {
     parts.push(h("div", { class: "card" }, h("h2", null, "Photo for " + (itemNames[p.itemKey] || "a piece")),
@@ -611,9 +647,11 @@ async function route() {
 }
 
 async function start() {
+  try { localStorage.setItem("dickens-offline-enabled", "1"); } catch (e) { /* private mode */ }
   var session = await db.getMeta("session", null);
   if (session && session.choices) choices = session.choices;
-  renderPill(Object.assign({ state: navigator.onLine ? "idle" : "offline" }, await countPending()));
+  // Until the first sync of this visit finishes, don't claim everything is synced.
+  renderPill(Object.assign({ state: navigator.onLine ? "syncing" : "offline" }, await countPending()));
   window.addEventListener("hashchange", route);
   window.addEventListener("online", function () { runSync(); });
   window.addEventListener("offline", function () { countPending().then(function (c) { renderPill(Object.assign({ state: "offline" }, c)); }); });

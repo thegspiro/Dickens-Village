@@ -3,10 +3,18 @@
 {% block title %}{{ 'Edit ' ~ item.name if item else 'Add a piece' }}{% endblock %}
 {% block content %}
 <h1>{{ 'Edit “' ~ item.name ~ '”' if item else 'Add a piece' }}</h1>
-{% if errors %}<p class="flash flash-error" role="alert">Please fix the highlighted fields.</p>{% endif %}
+{% if stale %}
+  <div class="flash flash-error" role="alert">
+    <p><strong>This was changed somewhere else (for example on your phone) after you opened this page.</strong>
+    Nothing has been saved yet. The current saved values are:</p>
+    <ul>{% for label, value in stale %}<li>{{ label }}: <strong>{{ value }}</strong></li>{% endfor %}</ul>
+    <p>The form still shows your changes. Press save again to keep them (replacing the values above), or <a href="">reload the page</a> to start from the saved version.</p>
+  </div>
+{% elif errors %}<p class="flash flash-error" role="alert">Please fix the highlighted fields.</p>{% endif %}
 
 <form method="post" class="card">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% if version is defined and version %}<input type="hidden" name="version" value="{{ version }}">{% endif %}
 
   <section class="catalog-lookup" data-search-url="{{ url_for('main.catalog_search') }}" hidden>
     <label for="catalog-lookup">Look up in catalog</label>

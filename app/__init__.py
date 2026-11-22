@@ -49,7 +49,9 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
     app.config.update(
         SECRET_KEY=cfg.secret_key,
         DICKENS=cfg,
-        MAX_CONTENT_LENGTH=cfg.max_upload_mb * 1024 * 1024,
+        # Whole-request cap (several photos at once); each photo is also checked
+        # against MAX_UPLOAD_MB on its own.
+        MAX_CONTENT_LENGTH=max(cfg.max_request_mb, cfg.max_upload_mb) * 1024 * 1024,
         SESSION_COOKIE_NAME="dickens_session",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",

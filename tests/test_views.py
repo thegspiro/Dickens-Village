@@ -190,12 +190,34 @@ def test_deleting_item_removes_photo_files(logged_in, fake_repo, app):
     assert not stored.exists()
 
 
-def test_oversized_upload_rejected(logged_in):
+def test_oversized_photo_rejected_with_message(logged_in, fake_repo):
     import io
     item_id = add_item(logged_in)
+    # MAX_UPLOAD_MB is 2 in the test config: this one file is too big, the other is fine
     resp = logged_in.post(f"/items/{item_id}/photos", data={
-        "photo": (io.BytesIO(b"0" * (3 * 1024 * 1024)), "big.jpg"), "csrf_token": csrf(logged_in)},
-        content_type="multipart/form-data")
+        "photo": [(io.BytesIO(b"0" * (3 * 1024 * 1024)), "big.jpg"), (png_bytes(), "ok.png")],
+        "csrf_token": csrf(logged_in)}, content_type="multipart/form-data", follow_redirects=True)
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 200
+    assert "big.jpg: That photo is larger than 2 MB." in body and "Added 1 photo." in body
+    assert len(fake_repo.photos) == 1
+
+
+def test_whole_request_limit_still_applies(tmp_path, fake_repo):
+    import io
+    from app import create_app
+    from app.config import load_config
+    from tests.conftest import make_env
+    env = make_env(tmp_path)
+    env["MAX_REQUEST_MB"] = "1"
+    env["MAX_UPLOAD_MB"] = "1"
+    application = create_app(load_config(env), repo_factory=lambda _c: fake_repo)
+    client = application.test_client()
+    with client.session_transaction() as sess:
+        sess["user"] = "gabriel"
+        sess["csrf"] = "t"
+    resp = client.post("/items/1/photos", data={"photo": (io.BytesIO(b"0" * (2 * 1024 * 1024)), "x.jpg")},
+                       content_type="multipart/form-data")
     assert resp.status_code == 413
 
 
@@ -203,3 +225,36 @@ def test_repo_closed_after_request(logged_in, fake_repo):
     before = fake_repo.closed
     logged_in.get("/items")
     assert fake_repo.closed > before
+
+
+def test_edit_form_detects_change_made_elsewhere(logged_in, fake_repo):
+    item_id = add_item(logged_in, storage_tub="1", condition_grade="good")
+    page = logged_in.get(f"/items/{item_id}/edit").get_data(as_text=True)
+    assert 'name="version" value="1"' in page
+    # the phone syncs a change while the edit page is open
+    fake_repo.items[item_id]["storage_tub"] = "7"
+    fake_repo.items[item_id]["version"] = 2
+    form = {"category": "building", "name": "Fezziwig's Warehouse", "storage_tub": "1",
+            "condition_grade": "fair", "version": "1", "csrf_token": csrf(logged_in)}
+    resp = logged_in.post(f"/items/{item_id}/edit", data=form)
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 409 and "changed somewhere else" in body
+    assert "Tub: <strong>7</strong>" in body
+    assert fake_repo.items[item_id]["condition_grade"] == "good"  # nothing saved
+    assert 'name="version" value="2"' in body  # saving again is a deliberate overwrite
+    form["version"] = "2"
+    form["csrf_token"] = csrf(logged_in)
+    assert logged_in.post(f"/items/{item_id}/edit", data=form).status_code == 302
+    assert fake_repo.items[item_id]["condition_grade"] == "fair"
+
+
+def test_extra_edit_detects_change_made_elsewhere(logged_in, fake_repo):
+    item_id = add_item(logged_in)
+    logged_in.post(f"/items/{item_id}/extras", data={"description": "Bulb", "csrf_token": csrf(logged_in)})
+    (extra_id,) = fake_repo.extras
+    assert 'name="version" value="1"' in logged_in.get(f"/items/{item_id}/extras/{extra_id}/edit").get_data(as_text=True)
+    fake_repo.extras[extra_id].update({"quantity": 3, "version": 2})
+    resp = logged_in.post(f"/items/{item_id}/extras/{extra_id}/edit", data={
+        "description": "Bulb", "quantity": "1", "version": "1", "csrf_token": csrf(logged_in)})
+    assert resp.status_code == 409 and "Quantity: <strong>3</strong>" in resp.get_data(as_text=True)
+    assert fake_repo.extras[extra_id]["quantity"] == 3

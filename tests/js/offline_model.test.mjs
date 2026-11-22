@@ -114,3 +114,15 @@ test("catalogFill mirrors the website lookup", () => {
   { catalog_id: 4, name: "Lord Lilliput's Cottage", item_number: "6015650", category: "building",
     year_introduced: 2025 });
 });
+
+test("discardChanges reverts to the server copy, or drops never-sent records", () => {
+  let rec = m.editRecord(synced(), { storage_tub: "9" }, F);
+  rec.error = { message: "deleted elsewhere" };
+  const back = m.discardChanges(rec, F);
+  assert.equal(back.local.storage_tub, "1");
+  assert.deepEqual(back.dirty, {});
+  assert.equal(back.error, null);
+  assert.equal(m.isPending(back), false);
+  const unsent = m.newLocalRecord("", "44444444-4444-4444-8444-444444444444", { name: "x" }, F);
+  assert.equal(m.discardChanges(unsent, F), null);
+});

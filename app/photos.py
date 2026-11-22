@@ -23,8 +23,16 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 log = logging.getLogger("dickens.photos")
 
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+# PNG and WebP are decoded at full size, so they are capped at 40 MP.
 MAX_PIXELS = 40_000_000
+# JPEGs are decoded at a reduced scale (Image.draft), which keeps memory low
+# even for 48-200 MP phone photos, so they may be much larger.
+MAX_JPEG_PIXELS = 250_000_000
 MAX_EDGE = 2000
+
+# Pillow's own decompression-bomb guard must allow the largest JPEG we accept;
+# our checks below are stricter for everything decoded at full size.
+Image.MAX_IMAGE_PIXELS = MAX_JPEG_PIXELS
 JPEG_QUALITY = 85
 THUMB_EDGE = 320
 FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.jpg$")
@@ -41,11 +49,17 @@ def _open_checked(stream: IO[bytes]) -> Image.Image:
             probe = Image.open(stream)
             if probe.format not in ALLOWED_FORMATS:
                 raise PhotoError("Upload a JPEG, PNG or WebP image.")
-            if probe.width * probe.height > MAX_PIXELS:
-                raise PhotoError("That image is too large (over 40 megapixels).")
+            pixels = probe.width * probe.height
+            limit = MAX_JPEG_PIXELS if probe.format == "JPEG" else MAX_PIXELS
+            if pixels > limit:
+                raise PhotoError(f"That image is too large (over {limit // 1_000_000} megapixels).")
             probe.verify()
             stream.seek(0)
             image = Image.open(stream)
+            if image.format == "JPEG":
+                # Decode at 1/2, 1/4 or 1/8 scale when that still gives at least
+                # MAX_EDGE pixels on the long side; the result is resized anyway.
+                image.draft("RGB", (MAX_EDGE, MAX_EDGE))
             image.load()
             return image
         except PhotoError:
@@ -54,6 +68,18 @@ def _open_checked(stream: IO[bytes]) -> Image.Image:
             raise PhotoError("That file is not a supported image.") from None
         except (OSError, SyntaxError, ValueError):
             raise PhotoError("That image file appears to be damaged.") from None
+
+
+def check_size(stream: IO[bytes], max_bytes: int) -> None:
+    """Reject a file larger than max_bytes without reading it into memory."""
+    try:
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(0)
+    except (OSError, ValueError):
+        return  # not seekable: the request-size limit still applies
+    if size > max_bytes:
+        raise PhotoError(f"That photo is larger than {max_bytes // (1024 * 1024)} MB.")
 
 
 def thumb_name(filename: str) -> str:
@@ -77,11 +103,13 @@ def _write_jpeg(image: Image.Image, path: Path) -> None:
         raise
 
 
-def save_photo(stream: IO[bytes], upload_dir: str) -> str:
+def save_photo(stream: IO[bytes], upload_dir: str, max_bytes: int | None = None) -> str:
     """Validate and store an uploaded image plus a small thumbnail.
 
     Returns the stored filename; the thumbnail is thumb_name(filename).
     """
+    if max_bytes is not None:
+        check_size(stream, max_bytes)
     image = _open_checked(stream)
     thumb = None
     try:

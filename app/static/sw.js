@@ -12,7 +12,7 @@
  */
 "use strict";
 
-var CACHE_VERSION = "v2";
+var CACHE_VERSION = "v3";
 var CACHE_NAME = "dickens-static-" + CACHE_VERSION;
 var DATA_CACHE = "dickens-data-v1";
 var OFFLINE_URL = "/offline";
@@ -88,23 +88,11 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  if (url.pathname.indexOf("/static/") === 0) {
-    // App files: answer from the cache, refresh it in the background.
-    event.respondWith(
-      caches.open(CACHE_NAME).then(function (cache) {
-        return cache.match(request).then(function (cached) {
-          var refresh = fetch(request).then(function (response) {
-            if (response.ok) cache.put(request, response.clone());
-            return response;
-          });
-          if (cached) {
-            event.waitUntil(refresh.catch(function () {}));
-            return cached;
-          }
-          return refresh;
-        });
-      })
-    );
+  if (url.pathname.indexOf("/static/") === 0 || url.pathname === APP_URL) {
+    // App files: network first, so a new version is used as soon as it is
+    // deployed (the phone app's modules must all come from the same version);
+    // the cached copy is used when the network is slow (4 s) or unavailable.
+    event.respondWith(networkFirst(request));
   }
   // Everything else (photos, catalog search, pages' data) goes to the network untouched.
 });
@@ -115,3 +103,19 @@ self.addEventListener("message", function (event) {
     event.waitUntil(caches.delete(DATA_CACHE));
   }
 });
+
+function networkFirst(request) {
+  return caches.open(CACHE_NAME).then(function (cache) {
+    var network = fetch(request).then(function (response) {
+      if (response.ok && response.type === "basic") cache.put(request, response.clone());
+      return response;
+    });
+    var timeout = new Promise(function (resolve) { setTimeout(resolve, 4000); });
+    return Promise.race([network.catch(function () { return null; }), timeout]).then(function (response) {
+      if (response) return response;
+      return cache.match(request).then(function (cached) {
+        return cached || network; // nothing cached: keep waiting for the network
+      });
+    });
+  });
+}

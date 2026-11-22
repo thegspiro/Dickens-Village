@@ -106,3 +106,12 @@ def test_parse_positive_int():
     assert parse_positive_int("12") == 12
     for bad in (None, "", "0", "-1", "1.5", "abc", "99999999999"):
         assert parse_positive_int(bad) is None
+
+
+def test_tomorrow_allowed_for_timezone_slack_but_not_later():
+    tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    _, errors = parse_item_form(valid_form(condition_checked_on=tomorrow))
+    assert "condition_checked_on" not in errors
+    later = (dt.date.today() + dt.timedelta(days=2)).isoformat()
+    _, errors = parse_item_form(valid_form(condition_checked_on=later))
+    assert "condition_checked_on" in errors

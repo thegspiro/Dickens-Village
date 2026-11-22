@@ -5,7 +5,7 @@
 set -eu
 
 : "${GUNICORN_WORKERS:=2}"
-: "${GUNICORN_TIMEOUT:=60}"
+: "${GUNICORN_TIMEOUT:=120}"  # long enough for several large photos over a slow link
 
 case "$GUNICORN_WORKERS" in
   ''|*[!0-9]*) echo "GUNICORN_WORKERS must be a whole number" >&2; exit 1 ;;

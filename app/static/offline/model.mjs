@@ -139,6 +139,20 @@ export function resolveConflict(rec, choices) {
 }
 
 /*
+ * Throw away the phone's unsent changes to a record. Returns the record as
+ * the server last sent it, or null if the server never had it (delete it).
+ */
+export function discardChanges(rec, fields) {
+  if (rec.id == null || !rec.server) return null;
+  var next = clone(rec);
+  next.local = pick(rec.server, fields);
+  next.dirty = {};
+  next.conflict = null;
+  next.error = null;
+  return next;
+}
+
+/*
  * Merge a full server snapshot into the phone's records.
  * Returns { put: [records to store], remove: [keys to delete] }.
  *   - records the server no longer has are removed, unless the phone still
