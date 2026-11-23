@@ -297,3 +297,12 @@ test("upgrading a database that has the stores already adds only what's missing"
   assert.deepEqual(created, ["meta"]);
   assert.equal(stores.photos.names.has("itemKey"), true);
 });
+
+test("fitWithin shrinks the long side to the limit and keeps the shape", () => {
+  assert.deepEqual(m.fitWithin(4000, 3000, 2000), { width: 2000, height: 1500 });
+  assert.deepEqual(m.fitWithin(3024, 4032, 2000), { width: 1500, height: 2000 });
+  assert.deepEqual(m.fitWithin(8000, 10, 2000), { width: 2000, height: 3 });
+  assert.equal(m.fitWithin(2000, 1000, 2000), null);
+  assert.equal(m.fitWithin(640, 480, 2000), null);
+  assert.equal(m.fitWithin(0, 480, 2000), null);
+});

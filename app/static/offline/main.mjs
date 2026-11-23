@@ -349,6 +349,8 @@ async function pieceView(key) {
             openViewer(viewerItems(), (rec.photos || []).length + j, e.currentTarget);
           } }, h("img", { src: url, alt: "Photo waiting to upload", onload: function () { URL.revokeObjectURL(url); } })),
             h("figcaption", { class: p.error ? "error" : "muted" }, p.error ? p.error.message : "Waiting to upload"),
+            p.error ? h("button", { type: "button", class: "link", onclick: function () { retryPhoto(p.key); } }, "Try again") : null,
+            p.error ? " " : null,
             h("button", { type: "button", class: "link danger", onclick: async function () {
               await db.del("photos", p.key); await refreshPill(); route();
             } }, "Remove"));
@@ -363,13 +365,60 @@ async function pieceView(key) {
   ];
 }
 
+/* Long side, in pixels, the server keeps photos at; storing more on the phone only wastes space. */
+var PHOTO_MAX_EDGE = 2000;
+
+/*
+ * Shrink a camera photo to PHOTO_MAX_EDGE before storing it. Re-encoding also
+ * drops its metadata (such as GPS location) on the phone. A JPEG that is small
+ * enough already, or a format this browser can't decode (e.g. HEIC), is kept
+ * as it is; the server checks and converts it either way.
+ */
+async function shrinkPhoto(file) {
+  if (typeof createImageBitmap !== "function") return { blob: file, name: file.name || "photo.jpg" };
+  var bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (err) {
+    return { blob: file, name: file.name || "photo.jpg" };
+  }
+  try {
+    var size = m.fitWithin(bitmap.width, bitmap.height, PHOTO_MAX_EDGE);
+    if (!size && file.type === "image/jpeg") return { blob: file, name: file.name || "photo.jpg" };
+    size = size || { width: bitmap.width, height: bitmap.height };
+    var canvas = document.createElement("canvas");
+    canvas.width = size.width;
+    canvas.height = size.height;
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; // transparent PNG areas become white, as on the server
+    ctx.fillRect(0, 0, size.width, size.height);
+    ctx.drawImage(bitmap, 0, 0, size.width, size.height);
+    var blob = await new Promise(function (resolve) { canvas.toBlob(resolve, "image/jpeg", 0.9); });
+    if (!blob) return { blob: file, name: file.name || "photo.jpg" };
+    return { blob: blob, name: String(file.name || "photo").replace(/\.[^.]*$/, "") + ".jpg" };
+  } finally {
+    bitmap.close();
+  }
+}
+
+/* Clear a photo's upload error so the next sync tries it again. */
+async function retryPhoto(key) {
+  await db.update("photos", key, function (current) {
+    return current ? Object.assign(current, { error: null }) : undefined;
+  });
+  await refreshPill();
+  route();
+  syncSoon();
+}
+
 async function addPhotos(itemKey, files) {
   var list = Array.prototype.slice.call(files || [], 0, 20);
   for (var i = 0; i < list.length; i++) {
     var f = list[i];
     var id = uuid();
+    var stored = await shrinkPhoto(f);
     try {
-      await db.put("photos", { key: "p-" + id, client_uuid: id, itemKey: itemKey, blob: f, name: f.name || "photo.jpg",
+      await db.put("photos", { key: "p-" + id, client_uuid: id, itemKey: itemKey, blob: stored.blob, name: stored.name,
         error: null, created: Date.now() });
     } catch (err) {
       window.alert("This phone is out of storage space for the app, so " + (list.length - i) +
@@ -701,6 +750,7 @@ async function attentionView() {
     var hasPiece = Object.prototype.hasOwnProperty.call(itemNames, p.itemKey);
     parts.push(h("div", { class: "card" }, h("h2", null, "Photo for " + (hasPiece ? itemNames[p.itemKey] || "(no name)" : "a deleted piece")),
       h("p", { class: "flash flash-error" }, p.error.message),
+      hasPiece ? h("button", { type: "button", onclick: function () { retryPhoto(p.key); } }, "Try again") : null,
       h("button", { type: "button", class: "danger", onclick: async function () {
         await db.del("photos", p.key); await refreshPill(); route();
       } }, "Remove this photo")));

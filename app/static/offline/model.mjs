@@ -306,6 +306,16 @@ export function mergeSnapshot(existing, serverRows, fields, keyPrefix, extraFor)
   return { put: put, remove: remove };
 }
 
+/*
+ * The size to store a photo at: the long side at most `max` pixels (the size
+ * the server keeps), aspect ratio kept. Returns null when it is small enough already.
+ */
+export function fitWithin(width, height, max) {
+  if (!(width > 0 && height > 0) || Math.max(width, height) <= max) return null;
+  var scale = max / Math.max(width, height);
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
 /* Catalog search on the phone, ranked like the server: item numbers first. */
 export function searchCatalog(entries, query, limit) {
   var q = String(query || "").trim().toLowerCase().replace(/\s+/g, " ");

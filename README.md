@@ -70,7 +70,7 @@ The **Phone app** (menu → *Phone app*, or `/app`) keeps a copy of your collect
 - browse and search your pieces;
 - add pieces, including filling them in from the catalog;
 - edit pieces and extras, and add extras;
-- take or attach photos.
+- take or attach photos (they're shrunk to 2000 pixels on the long side, the size the server keeps, so they take less space on the phone and upload faster). A photo the server refused can be tried again from **Needs attention**.
 
 Changes are saved on the phone, and the pill at the top shows how many are waiting. They sync automatically when you're back online; tap the pill to sync right away. Browsing the website online also keeps the phone's copy up to date.
 
