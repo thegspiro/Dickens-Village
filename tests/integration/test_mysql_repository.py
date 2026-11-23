@@ -99,6 +99,10 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0008_catalog_listed"
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM catalog_items LIKE 'listed'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0007_photo_order_captions"
         with conn.cursor() as cur:
             cur.execute("SHOW COLUMNS FROM item_photos LIKE 'sort_order'")
@@ -130,7 +134,7 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
             assert cur.fetchone() is None
         assert migrate.migrate_up(conn, migrations) == [
             "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
-            "0006_item_scans", "0007_photo_order_captions"]
+            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -511,6 +515,7 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
     target = by_version["0007_photo_order_captions"]
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, list(by_version.values())) == "0008_catalog_listed"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0007_photo_order_captions"
         repo = MySQLRepository(conn)
         a = repo.create_item(item(name="Backfill A"))
@@ -520,7 +525,8 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
                 cur.execute("INSERT INTO item_photos (item_id, filename) VALUES (%s, %s)",
                             (item_id, f"{name:0<32}.jpg"))
         conn.commit()
-        assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions"]
+        assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions",
+                                                                       "0008_catalog_listed"]
 
         def order(item_id):
             with conn.cursor() as cur:
@@ -592,3 +598,81 @@ def test_catalog_photo_order_moves_the_lookup_thumbnail(db_config, repo):
     assert repo.reorder_catalog_photos(entry["id"], [b]) is False
     assert repo.set_catalog_photo_caption(a, "Box art")["caption"] == "Box art"
     assert [p["caption"] for p in repo.list_catalog_photos(entry["id"])] == [None, "Box art"]
+
+
+def test_upload_filenames_lists_photos_catalog_photos_and_scans(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    item_id = repo.create_item(item(name="Files"))
+    repo.add_photo(item_id, "7" * 32 + ".jpg", None)
+    repo.add_scan(item_id, "8" * 32 + ".glb", None, 10)
+    repo.add_catalog_photo(repo.search_catalog("56.65161")[0]["id"], "9" * 32 + ".jpg", None)
+    names = repo.upload_filenames()
+    assert {"7" * 32 + ".jpg", "8" * 32 + ".glb", "9" * 32 + ".jpg"} <= names
+
+
+def test_entries_removed_from_the_csv_are_unlisted_not_deleted(db_config, repo):
+    rows = catalog.load_directory(CATALOG_DIR)
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, rows)
+    finally:
+        conn.close()
+    entry = repo.search_catalog("56.65161")[0]
+    key = next(r.values["source_key"] for r in rows if r.values["item_number"] == "56.65161")
+    data = item(name="Linked to a withdrawn entry")
+    data["catalog_id"] = entry["id"]
+    item_id = repo.create_item(data)
+    photo = repo.add_catalog_photo(entry["id"], "4" * 32 + ".jpg", None)
+    etag = repo.catalog_etag()
+
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, [r for r in rows if r.values["source_key"] != key])
+    finally:
+        conn.close()
+    assert [e for e in repo.search_catalog("56.65161") if e["id"] == entry["id"]] == []
+    kept = repo.get_catalog_item(entry["id"])
+    assert kept is not None and kept["listed"] == 0
+    assert repo.get_item(item_id)["catalog_id"] == entry["id"]
+    assert repo.get_catalog_photo(photo) is not None
+    assert {e["id"]: e for e in repo.catalog_all()}[entry["id"]]["listed"] == 0
+    assert repo.catalog_etag() != etag  # phones fetch the catalog again
+    with connect(db_config) as check, check.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM catalog_items WHERE listed = 0")
+        assert cur.fetchone()["n"] == 1
+
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, rows)  # it came back
+    finally:
+        conn.close()
+    assert repo.get_catalog_item(entry["id"])["listed"] == 1
+    assert any(e["id"] == entry["id"] for e in repo.search_catalog("56.65161"))
+
+
+def test_export_data_reads_everything_consistently(db_config, repo):
+    building = repo.create_item(item(name="Export building"))
+    figure_data = item(name="Export figure")
+    figure_data["category"] = "figure"
+    figure = repo.create_item(figure_data)
+    assert repo.add_link(building, figure)
+    extra, _ = parse_extra_form({"description": "Bulb", "quantity": "2"})
+    repo.add_extra(building, extra)
+    photo = repo.add_photo(building, "e" * 32 + ".jpg", "front.jpg")
+    repo.set_photo_caption(photo, "Front")
+    repo.add_scan(building, "f" * 32 + ".glb", "scan.glb", 99)
+    data = repo.export_data()
+    assert {"items", "extras", "links", "photos", "scans", "catalog_photos"} == set(data)
+    names = {r["id"]: r["name"] for r in data["items"]}
+    assert names[building] == "Export building" and "catalog_item_number" in data["items"][0]
+    assert {"building_id": building, "item_id": figure} in data["links"]
+    assert any(p["id"] == photo and p["caption"] == "Front" and p["sort_order"] == 0 for p in data["photos"])
+    assert any(s["filename"] == "f" * 32 + ".glb" for s in data["scans"])
+    assert any(e["item_id"] == building and e["quantity"] == 2 for e in data["extras"])
+    # the connection is usable for writes afterwards (the read-only snapshot ended)
+    repo.update_item(building, item(name="Renamed after export"))
+    assert repo.get_item(building)["name"] == "Renamed after export"

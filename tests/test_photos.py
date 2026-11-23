@@ -92,3 +92,38 @@ def test_large_png_still_capped(tmp_path, monkeypatch):
 def test_per_file_size_limit(tmp_path):
     with pytest.raises(photos.PhotoError, match="larger than 1 MB"):
         photos.save_photo(io.BytesIO(b"0" * (2 * 1024 * 1024)), str(tmp_path), max_bytes=1024 * 1024)
+
+
+def test_pillows_own_bomb_limit_is_reported_as_unsupported(tmp_path, monkeypatch):
+    # Our header checks allow it, but Pillow refuses to decode past its own limit.
+    monkeypatch.setattr(photos, "MAX_PIXELS", 10**9)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1_000)
+    with pytest.raises(photos.PhotoError, match="not a supported image"):
+        photos.save_photo(png_bytes((200, 200), mode="RGB"), str(tmp_path))
+
+
+def test_uploads_on_several_threads_at_once(tmp_path, monkeypatch):
+    """gunicorn runs threaded workers: decoding must not depend on process-wide state."""
+    import threading
+    import warnings
+
+    monkeypatch.setattr(photos, "MAX_PIXELS", 50_000)
+    filters_before = list(warnings.filters)
+    results: dict[int, object] = {}
+
+    def upload(n: int) -> None:
+        size = (400, 400) if n % 4 == 0 else (120, 90)  # every fourth one is over the limit
+        try:
+            results[n] = photos.save_photo(png_bytes(size, mode="RGB"), str(tmp_path))
+        except photos.PhotoError as exc:
+            results[n] = exc
+
+    threads = [threading.Thread(target=upload, args=(n,)) for n in range(24)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert all(isinstance(results[n], photos.PhotoError) == (n % 4 == 0) for n in range(24))
+    assert all("megapixels" in str(results[n]) for n in range(0, 24, 4))
+    assert len({results[n] for n in range(24) if n % 4}) == 18  # distinct stored files
+    assert warnings.filters == filters_before

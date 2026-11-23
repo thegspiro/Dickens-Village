@@ -43,4 +43,18 @@
 </section>
 </div>
 <p class="muted">Totals only include pieces where a price or value has been entered.</p>
+
+<section class="card" id="export">
+  <h2>Download your collection</h2>
+  <ul class="links">
+    <li><a href="{{ url_for('main.export_file', name='pieces.csv') }}" download>Pieces (CSV)</a>
+      <span class="muted">opens in Excel, Numbers or Google Sheets; one row per piece</span></li>
+    <li><a href="{{ url_for('main.export_file', name='extras.csv') }}" download>Extras (CSV)</a>
+      <span class="muted">one row per extra, with its piece</span></li>
+    <li><a href="{{ url_for('main.export_file', name='collection.json') }}" download>Everything (JSON)</a>
+      <span class="muted">pieces with their extras, links, photos and scans, for other programs</span></li>
+    <li><a href="{{ url_for('main.export_file', name='photos-and-scans.zip') }}" download>Photos and 3D scans (zip)</a>
+      <span class="muted">every photo and scan at full size, in a folder per piece, plus the files above; can be large</span></li>
+  </ul>
+</section>
 {% endblock %}

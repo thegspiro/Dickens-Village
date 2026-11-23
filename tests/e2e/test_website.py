@@ -259,3 +259,34 @@ def test_csrf_and_logout(desk):
     expect(page).to_have_url(re.compile(r"/login"))
     page.goto("/items")
     expect(page).to_have_url(re.compile(r"/login"))
+
+
+def test_export_downloads(desk, tag, images):
+    import csv as csv_module
+    import json as json_module
+    import zipfile
+
+    ctx, page, errors = desk
+    item_id = add_piece(page, f"Exported {tag}", storage_tub="3", notes="=1+1")
+    page.goto(f"/items/{item_id}")
+    page.set_input_files("#photo", str(images["house-red.jpg"]))
+    page.click('#photos button:has-text("Upload")')
+    expect(page.locator(".flash-success")).to_contain_text("Added 1 photo.")
+    page.goto("/summary")
+    with page.expect_download() as info:
+        page.click('a:has-text("Photos and 3D scans (zip)")')
+    download = info.value
+    assert download.suggested_filename.startswith("dickens-village-photos-and-scans-")
+    with zipfile.ZipFile(download.path()) as archive:
+        assert archive.testzip() is None
+        doc = json_module.loads(archive.read("collection.json"))
+        piece = next(p for p in doc["pieces"] if p["id"] == item_id)
+        assert piece["storage_tub"] == "3"
+        photo_file = piece["photos"][0]["file"]
+        assert archive.read(photo_file)[:2] == b"\xff\xd8"
+    with page.expect_download() as info:
+        page.click('a:has-text("Pieces (CSV)")')
+    with open(info.value.path(), encoding="utf-8-sig", newline="") as handle:
+        row = next(r for r in csv_module.DictReader(handle) if r["id"] == str(item_id))
+    assert row["notes"] == "'=1+1" and row["photos"] == "1"
+    assert errors == []

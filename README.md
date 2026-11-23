@@ -19,7 +19,7 @@ A self-hosted tracker for a Department 56 Dickens' Village collection: buildings
 
 ## Reference catalog
 
-`data/catalog/dickens_village_2025.csv` holds Department 56's 2025 Dickens' Village checklists: 399 lighted pieces and 361 accessories, including the individual pieces of sets. Browse it from the **Catalog** tab, where each entry has its own page with your reference photos, the pieces you own that are linked to it, and an "Add to my collection" button. It loads into the database on every start (`python -m app.catalog sync`). Loading is an upsert, so it is safe to repeat, and corrections to the CSV take effect on the next restart. Lighted pieces fill in as Building and accessories as Accessory; change the category on the form when a piece is a figure.
+`data/catalog/dickens_village_2025.csv` holds Department 56's 2025 Dickens' Village checklists: 399 lighted pieces and 361 accessories, including the individual pieces of sets. Browse it from the **Catalog** tab, where each entry has its own page with your reference photos, the pieces you own that are linked to it, and an "Add to my collection" button. It loads into the database on every start (`python -m app.catalog sync`). Loading is an upsert, so it is safe to repeat, and corrections to the CSV take effect on the next restart. An entry removed from the CSV is not deleted, because pieces and photos may belong to it: it disappears from the lookup and search, and its page says it's no longer in the reference lists. If it comes back in a later CSV, it is listed again. Lighted pieces fill in as Building and accessories as Accessory; change the category on the form when a piece is a figure.
 
 Problems in the source PDFs, such as a retirement year printed as 2917 or one item number used for two pieces, are listed in `data/catalog/dickens_village_2025_source_issues.txt`. The impossible years were left blank rather than guessed. `scripts/catalog/` has the scripts that built the CSV from the PDFs.
 
@@ -40,7 +40,7 @@ Python 3.13 and Flask, with server-rendered HTML and no JavaScript. Data lives i
    Paste the printed `ADMIN_PASSWORD_HASH='…'` line into `.env`. Keep the single quotes, because the hash contains `$`.
 4. Start the app: `docker compose up -d`. Then open `http://<server>:<APP_PORT>`.
 
-On startup the app applies any pending database migrations, then starts the web server. The database is not published on any host port.
+On startup the app applies any pending database migrations, then starts the web server. The database is not published on any host port. The web server runs `GUNICORN_WORKERS` processes (default 2) with `GUNICORN_THREADS` threads each (default 4), so a slow upload never blocks the rest of the site.
 
 ### Unraid
 
@@ -70,7 +70,7 @@ The **Phone app** (menu → *Phone app*, or `/app`) keeps a copy of your collect
 - browse and search your pieces;
 - add pieces, including filling them in from the catalog;
 - edit pieces and extras, and add extras;
-- take or attach photos.
+- take or attach photos (they're shrunk to 2000 pixels on the long side, the size the server keeps, so they take less space on the phone and upload faster). A photo the server refused can be tried again from **Needs attention**.
 
 Changes are saved on the phone, and the pill at the top shows how many are waiting. They sync automatically when you're back online; tap the pill to sync right away. Browsing the website online also keeps the phone's copy up to date.
 
@@ -86,12 +86,29 @@ If you expose the app beyond your home network, put it behind a reverse proxy wi
 
 The same image runs on ECS or EC2. It needs MySQL 8.0.19 or newer (the catalog import uses the `INSERT … AS new` syntax). Point `DB_HOST`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` at an RDS MySQL 8 instance, and mount persistent storage (e.g. EFS) at `/data/uploads`. Photos are stored on disk only. S3 storage is not implemented.
 
+## Exporting your collection
+
+The **Summary** page has download links for:
+- **Pieces (CSV)** and **Extras (CSV)**: one row per piece or extra, for Excel, Numbers or Google Sheets. Cells that a spreadsheet would treat as a formula start with `'`.
+- **Everything (JSON)**: pieces with their extras, links, photos (with captions, in order) and scans.
+- **Photos and 3D scans (zip)**: every photo and scan at full size, in a folder per piece (and per catalog entry for reference photos), plus the files above. It is streamed, so it can be large without using much memory on the server.
+
+These are copies for you to keep or use elsewhere; for a restorable backup, see below.
+
 ## Backups
 
 ```sh
 docker compose exec db sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > dickens-backup.sql
 ```
 Also back up the uploads volume or folder.
+
+## Tidying the upload folder
+
+If the server stops in the middle of saving or deleting a photo or scan, a file can be left in the upload folder that nothing refers to. To list such files, and any files the database expects but can't find:
+```sh
+docker compose run --rm app python -m app.uploads status
+```
+To delete the orphaned files it lists, run `python -m app.uploads clean --yes` the same way. Only files named the way the app names them are considered, files changed in the last hour are skipped (an upload may be in progress), and nothing else in the folder is touched.
 
 ## Migrations
 

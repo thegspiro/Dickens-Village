@@ -120,6 +120,7 @@ class LockConn:
 
     def __init__(self, lock_ok=True):
         self.lock_ok, self.batches, self.committed, self.rolled_back = lock_ok, [], False, False
+        self.statements = []
 
     def cursor(self):
         conn = self
@@ -131,8 +132,11 @@ class LockConn:
             def __exit__(self, *a):
                 return False
 
+            rowcount = 0
+
             def execute(self, sql, params=None):
                 self.last = sql
+                conn.statements.append(sql)
 
             def fetchone(self):
                 return {"got": 1 if conn.lock_ok else 0, "released": 1}
@@ -155,11 +159,20 @@ def test_sync_batches_and_commits():
     conn = LockConn()
     assert catalog.sync(conn, rows, batch_size=300) == 760
     assert conn.batches == [300, 300, 160] and conn.committed
+    unlist = [s for s in conn.statements if s.startswith("UPDATE catalog_items SET listed = 0")]
+    assert len(unlist) == 1 and unlist[0].count("%s") == 760
 
 
 def test_sync_requires_lock():
     with pytest.raises(catalog.CatalogError, match="lock"):
-        catalog.sync(LockConn(lock_ok=False), [])
+        catalog.sync(LockConn(lock_ok=False), catalog.load_directory(DATA)[:1])
+
+
+def test_sync_refuses_to_import_nothing():
+    conn = LockConn()
+    with pytest.raises(catalog.CatalogError, match="No catalog rows"):
+        catalog.sync(conn, [])
+    assert conn.statements == [] and not conn.committed
 
 
 # -- search endpoint ------------------------------------------------------------
@@ -201,7 +214,7 @@ def test_search_result_shape(logged_in, seeded):
     assert r == {
         "id": seeded["acc"], "list": "accessories", "item_number": "56.58539", "name": "The Big Prize Turkey",
         "details": None, "series": "A Christmas Carol", "year_issued": 2001, "year_retired": 2008,
-        "is_current": False, "srp_usd": "27.50", "srp_cad": "44.00", "category": "accessory", "parent_name": None,
+        "is_current": False, "listed": True, "srp_usd": "27.50", "srp_cad": "44.00", "category": "accessory", "parent_name": None,
         "url": f"/catalog/{seeded['acc']}", "photo_count": 0, "thumb_url": None,
     }
 
@@ -253,3 +266,17 @@ def test_edit_shows_link_and_can_unlink(logged_in, fake_repo, seeded):
         "category": "building", "name": "Cottage", "catalog_id": str(seeded["current"]),
         "catalog_unlink": "1", "csrf_token": csrf(logged_in)})
     assert fake_repo.items[item_id]["catalog_id"] is None
+
+
+def test_unlisted_entries_are_hidden_from_search_but_kept(logged_in, fake_repo):
+    from tests.conftest import csrf
+
+    gone = fake_repo.add_catalog(item_number="56.99999", name="Withdrawn Cottage", listed=0)
+    fake_repo.add_catalog(item_number="56.99998", name="Withdrawn Cottage Two")
+    hits = logged_in.get("/catalog/search?q=Withdrawn").get_json()["results"]
+    assert [h["name"] for h in hits] == ["Withdrawn Cottage Two"] and hits[0]["listed"] is True
+    page = logged_in.get(f"/catalog/{gone}").get_data(as_text=True)
+    assert "no longer in the reference catalog lists" in page
+    logged_in.post("/items/new", data={"category": "building", "name": "Mine", "catalog_id": str(gone),
+                                       "csrf_token": csrf(logged_in)})
+    assert next(iter(fake_repo.items.values()))["catalog_id"] == gone  # linking still works

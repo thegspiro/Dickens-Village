@@ -293,7 +293,7 @@ class FakeRepository:
         new_id = next(self._ids)
         row = {
             "id": new_id, "list_name": "lighted", "item_number": None, "name": "", "details": None,
-            "series": None, "year_issued": None, "year_retired": None, "is_current": 0,
+            "series": None, "year_issued": None, "year_retired": None, "is_current": 0, "listed": 1,
             "srp_usd": None, "srp_cad": None, "default_category": None,
             "parent_name": None, "parent_item_number": None,
         }
@@ -308,6 +308,8 @@ class FakeRepository:
         digits = "".join(ch for ch in q if ch.isdigit())
         hits = []
         for row in self.catalog.values():
+            if not row.get("listed", 1):
+                continue
             number = (row["item_number"] or "").lower()
             if q in number or q in row["name"].lower() or (len(digits) >= 2 and digits in number.replace(".", "")):
                 rank = 0 if number == q else 1 if number.startswith(q) else 2 if q in number else 3
@@ -359,6 +361,24 @@ class FakeRepository:
             key = tuple(i.get(c) for c in STORAGE_COLUMNS)
             counts[key] = counts.get(key, 0) + 1
         return [dict(zip(STORAGE_COLUMNS, k), item_count=n) for k, n in counts.items()]
+
+    def export_data(self) -> dict[str, list[dict[str, Any]]]:
+        added = dt.datetime(2026, 11, 19, 12, 0)
+        items = []
+        for row in sorted(self.items.values(), key=lambda r: r["id"]):
+            entry = self.catalog.get(row.get("catalog_id")) if row.get("catalog_id") else None
+            items.append({**row, "catalog_item_number": entry and entry["item_number"],
+                          "catalog_name": entry and entry["name"]})
+        photos = [{"created_at": added, "sort_order": 0, "caption": None, **p}
+                  for p in sorted(self.photos.values(), key=lambda p: (p["item_id"], p.get("sort_order", 0), p["id"]))]
+        scans = [{"created_at": added, **sc} for sc in sorted(self.scans.values(), key=lambda x: x["id"])]
+        catalog_photos = [{"created_at": added, "sort_order": 0, "caption": None, **p,
+                           "item_number": self.catalog[p["catalog_id"]]["item_number"],
+                           "name": self.catalog[p["catalog_id"]]["name"]}
+                          for p in sorted(self.catalog_photos.values(), key=lambda p: (p["catalog_id"], p["id"]))]
+        return {"items": items, "extras": sorted(self.extras.values(), key=lambda e: (e["item_id"], e["id"])),
+                "links": [{"building_id": b, "item_id": i} for b, i in sorted(self.links)],
+                "photos": photos, "scans": scans, "catalog_photos": catalog_photos}
 
     def collection_summary(self) -> dict[str, Any]:
         return {
