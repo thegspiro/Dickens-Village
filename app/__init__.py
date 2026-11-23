@@ -8,7 +8,7 @@ from pathlib import Path
 from decimal import Decimal
 from typing import Any, Callable
 
-from flask import Flask, g, render_template
+from flask import Flask, g, render_template, request
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -127,6 +127,12 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
 
     @app.errorhandler(HTTPException)
     def _http_error(exc: HTTPException) -> Any:
+        if request.path == "/api/v1" or request.path.startswith("/api/v1/"):
+            # No API route matched (unknown path or method), so the API blueprint's
+            # own handler never ran; the phone app still expects a JSON error.
+            from .api import _error
+
+            return _error(exc.code or 500, exc.description or exc.name)
         return render_template("error.html", error=exc), exc.code
 
     @app.errorhandler(Exception)

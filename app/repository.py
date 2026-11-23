@@ -47,6 +47,10 @@ def _is_duplicate_key(exc: Exception) -> bool:
     return bool(args) and args[0] == 1062
 
 
+class VersionConflict(Exception):
+    """The row's version is not the one the caller expected: someone else saved it first."""
+
+
 def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -154,13 +158,23 @@ class MySQLRepository:
         log.info("Created item id=%s", new_id)
         return new_id
 
-    def update_item(self, item_id: int, data: dict[str, Any]) -> bool:
+    def update_item(self, item_id: int, data: dict[str, Any], expected_version: int | None = None) -> bool:
+        """Save every item field. Returns False if the item does not exist.
+
+        With expected_version, raises VersionConflict (and writes nothing) if
+        the row was saved by someone else since that version was read. The
+        check runs under the row lock, so it cannot race another writer.
+        """
         columns = list(ITEM_COLUMNS)
         sql = f"UPDATE items SET {', '.join(f'{c} = %s' for c in columns)} WHERE id = %s"
         with self._write() as cur:
-            cur.execute("SELECT id FROM items WHERE id = %s FOR UPDATE", (item_id,))
-            if cur.fetchone() is None:
+            cur.execute("SELECT id, version FROM items WHERE id = %s FOR UPDATE", (item_id,))
+            row = cur.fetchone()
+            if row is None:
                 return False
+            if expected_version is not None and int(row["version"]) != expected_version:
+                log.info("Item id=%s not saved: version %s, expected %s", item_id, row["version"], expected_version)
+                raise VersionConflict(item_id)
             cur.execute(sql.replace(" WHERE id", ", version = version + 1 WHERE id"),
                         [*[data[c] for c in columns], item_id])
         log.info("Updated item id=%s", item_id)
@@ -361,21 +375,26 @@ class MySQLRepository:
             fresh = cur.fetchone()
         return "ok", None, fresh
 
-    def update_extra(self, item_id: int, extra_id: int, data: dict[str, Any]) -> bool:
+    def update_extra(self, item_id: int, extra_id: int, data: dict[str, Any],
+                     expected_version: int | None = None) -> bool:
+        """Save an extra. Returns False if it does not exist; same expected_version
+        contract as update_item."""
         with self._write() as cur:
+            cur.execute("SELECT id, version FROM item_extras WHERE id = %s AND item_id = %s FOR UPDATE",
+                        (extra_id, item_id))
+            row = cur.fetchone()
+            if row is None:
+                return False
+            if expected_version is not None and int(row["version"]) != expected_version:
+                log.info("Extra id=%s not saved: version %s, expected %s", extra_id, row["version"], expected_version)
+                raise VersionConflict(extra_id)
             cur.execute(
                 "UPDATE item_extras SET description = %s, quantity = %s, condition_grade = %s, notes = %s, "
                 "version = version + 1 WHERE id = %s AND item_id = %s",
                 (data["description"], data["quantity"], data["condition_grade"], data["notes"],
                  extra_id, item_id),
             )
-            return cur.rowcount > 0 or self._extra_exists(cur, item_id, extra_id)
-
-    @staticmethod
-    def _extra_exists(cur: Any, item_id: int, extra_id: int) -> bool:
-        # rowcount is 0 when an UPDATE changes nothing, so check existence separately.
-        cur.execute("SELECT 1 AS x FROM item_extras WHERE id = %s AND item_id = %s", (extra_id, item_id))
-        return cur.fetchone() is not None
+            return True
 
     def delete_extra(self, item_id: int, extra_id: int) -> bool:
         with self._write() as cur:

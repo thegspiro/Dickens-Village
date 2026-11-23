@@ -263,3 +263,20 @@ def test_photo_upload_idempotent(logged_in, fake_repo, app):
 def test_api_errors_are_json(logged_in):
     resp = logged_in.patch("/api/v1/items/1", data="x", headers=headers(logged_in))
     assert resp.status_code == 400 and resp.is_json
+
+
+@pytest.mark.parametrize("method, path, status", [
+    ("GET", "/api/v1/nope", 404),
+    ("GET", "/api/v1", 404),
+    ("DELETE", "/api/v1/items/1", 405),
+])
+def test_unmatched_api_requests_get_json_errors(logged_in, method, path, status):
+    resp = logged_in.open(path, method=method)
+    assert resp.status_code == status
+    assert resp.is_json and resp.get_json()["error"]
+    assert resp.headers["Cache-Control"] == "no-store"
+
+
+def test_unknown_website_pages_still_get_html(logged_in):
+    resp = logged_in.get("/nope")
+    assert resp.status_code == 404 and resp.mimetype == "text/html"
