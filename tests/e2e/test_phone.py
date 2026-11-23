@@ -330,3 +330,73 @@ def test_unsynced_extra_of_a_piece_deleted_elsewhere_needs_attention(phone, make
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     expect(page.locator("#sync-pill")).not_to_contain_text("waiting")
     assert [e for e in errors if e.startswith("pageerror")] == []  # the server's 404 for the extra is logged
+
+
+def test_gateway_error_opens_the_phone_app(phone, tag):
+    ctx, page, errors = phone
+    open_app_and_sync(page)
+    page.goto("/items")
+    page.evaluate("navigator.serviceWorker.ready.then(() => true)")
+    # the reverse proxy answers for the app while it restarts
+    ctx.route("**/items*", lambda route: route.fulfill(status=502, content_type="text/html",
+                                                      body="<h1>502 Bad Gateway</h1>"))
+    page.goto("/items")
+    expect(page.locator("body.offline-app")).to_be_visible()
+    expect(page.locator("h1")).to_contain_text("My collection")
+    ctx.unroute("**/items*")
+    # a real server error is still shown, not hidden behind the phone app
+    ctx.route("**/items*", lambda route: route.fulfill(status=500, content_type="text/html",
+                                                      body="<h1>Server error</h1>"))
+    page.goto("/items")
+    expect(page.locator("h1")).to_contain_text("Server error")
+    ctx.unroute("**/items*")
+
+
+def test_service_worker_cache_belongs_to_this_deploy(phone):
+    ctx, page, errors = phone
+    open_app_and_sync(page)
+    build = page.request.get("/sw.js").text().split('var CACHE_VERSION = "', 1)[1].split('"', 1)[0]
+    assert build and build != "__BUILD__"
+    names = page.evaluate("caches.keys()")
+    assert f"dickens-static-{build}" in names
+    assert [n for n in names if n.startswith("dickens-static-")] == [f"dickens-static-{build}"]
+    cached = page.evaluate(f"caches.open('dickens-static-{build}').then(c => c.keys())"
+                           ".then(ks => ks.map(k => new URL(k.url).pathname))")
+    assert "/static/offline/sync.mjs" in cached and "/app" in cached
+    assert not [p for p in cached if p.startswith("/static/vendor/")]
+    assert errors == []
+
+
+def test_thumbnail_of_a_photo_deleted_elsewhere_is_forgotten(phone, make_context, tag, images):
+    ctx, page, errors = phone
+    _, desk, _ = make_context()
+    login(desk)
+    item_id = add_piece(desk, f"Pictured {tag}")
+    desk.goto(f"/items/{item_id}")
+    desk.set_input_files("#photo", str(images["house-red.jpg"]))
+    desk.click('#photos button:has-text("Upload")')
+    expect(desk.locator(".flash-success")).to_contain_text("Added 1 photo.")
+    photo_id = int(desk.locator("#photos img").first.get_attribute("src").split("/")[2])
+    open_app_and_sync(page)
+    page.goto(f"/app#/piece/s-{item_id}")
+    expect(page.locator(f'img[src="/photos/{photo_id}/thumb"]')).to_be_visible()
+    thumb = f"/photos/{photo_id}/thumb"
+
+    def cached():
+        return page.evaluate("caches.open('dickens-data-v1').then(c => c.keys())"
+                             ".then(ks => ks.map(k => new URL(k.url).pathname))")
+
+    def wait_until(check):
+        for _ in range(50):
+            if check():
+                return
+            page.wait_for_timeout(200)
+        raise AssertionError(f"cached thumbnails: {cached()}")
+
+    wait_until(lambda: thumb in cached())
+    desk.locator(f'#photos form[action="/photos/{photo_id}/delete"] button').click()
+    expect(desk.locator(".flash-success")).to_contain_text("Photo removed.")
+    page.click("#sync-pill button")
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    wait_until(lambda: thumb not in cached())
+    assert errors == []

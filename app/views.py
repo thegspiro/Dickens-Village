@@ -248,9 +248,16 @@ def manifest() -> Any:
     return response
 
 
+SW_BUILD_PLACEHOLDER = '"__BUILD__"'  # the quoted string literal in sw.js
+
+
 @bp.get("/sw.js")
 def service_worker() -> Any:
-    response = send_from_directory(current_app.static_folder, "sw.js", mimetype="text/javascript", max_age=0)
+    # Served with this deploy's build id as its cache version: any change to the
+    # app's files changes sw.js, so phones install it and re-download everything.
+    source = (Path(current_app.static_folder) / "sw.js").read_text(encoding="utf-8")
+    body = source.replace(SW_BUILD_PLACEHOLDER, '"' + current_app.config["STATIC_BUILD"] + '"', 1)
+    response = current_app.response_class(body, mimetype="text/javascript")
     # Always check for a new version so updates reach installed phones promptly.
     response.headers["Cache-Control"] = "no-cache"
     response.headers["Service-Worker-Allowed"] = "/"

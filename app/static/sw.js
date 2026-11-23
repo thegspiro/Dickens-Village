@@ -1,22 +1,27 @@
 /*
  * Service worker for the Dickens Village Tracker.
  *
- * - Caches the app's own files, the phone-app shell (/app) and an offline page.
+ * - Caches the app's own files, the phone-app shell (/app) and an offline page,
+ *   all from one deploy: the server fills in CACHE_VERSION with a hash of
+ *   those files, so a deploy that changes any of them installs a fresh copy of
+ *   all of them, and the old copy is deleted once the new one is complete.
  * - Website pages always come from the network. When the server can't be
- *   reached, the phone app (/app) opens instead; it works from the copy of
- *   your collection kept in the phone's own storage (IndexedDB), not from here.
+ *   reached, or a proxy in front of it answers 502/503/504 (it is restarting),
+ *   the phone app (/app) opens instead; it works from the copy of your
+ *   collection kept in the phone's own storage (IndexedDB), not from here.
  * - Photo thumbnails are cached as they are viewed so they show offline.
- *   That cache is erased when you log out.
- *
- * Bump CACHE_VERSION whenever a file in PRECACHE changes so phones pick it up.
+ *   Cached ones are refreshed after a week when online, dropped when the
+ *   server no longer serves them, and erased when you log out.
  */
 "use strict";
 
-var CACHE_VERSION = "v3";
+var CACHE_VERSION = "__BUILD__";
 var CACHE_NAME = "dickens-static-" + CACHE_VERSION;
 var DATA_CACHE = "dickens-data-v1";
 var OFFLINE_URL = "/offline";
 var APP_URL = "/app";
+var THUMB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+var CACHED_AT = "X-Dickens-Cached-At";
 var PRECACHE = [
   OFFLINE_URL,
   APP_URL,
@@ -59,40 +64,19 @@ self.addEventListener("fetch", function (event) {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === "navigate") {
-    // Pages: always the network. If it can't be reached, open the phone app
-    // (or the offline page if the app isn't cached yet).
-    event.respondWith(
-      fetch(request).catch(function () {
-        return caches.match(APP_URL).then(function (app) {
-          return app || caches.match(OFFLINE_URL);
-        });
-      })
-    );
+    event.respondWith(page(request));
     return;
   }
 
   if (/^\/(catalog-)?photos\/\d+\/thumb$/.test(url.pathname)) {
-    // Thumbnails never change for a given id: cache-first, filled as you browse.
-    event.respondWith(
-      caches.open(DATA_CACHE).then(function (cache) {
-        return cache.match(request).then(function (cached) {
-          return cached || fetch(request).then(function (response) {
-            if (response.ok && response.type === "basic" && !response.redirected) {
-              cache.put(request, response.clone());
-            }
-            return response;
-          });
-        });
-      })
-    );
+    event.respondWith(thumbnail(request));
     return;
   }
 
+  if (url.pathname.indexOf("/static/vendor/") === 0) return; // large 3D viewer files: browser cache only
+
   if (url.pathname.indexOf("/static/") === 0 || url.pathname === APP_URL) {
-    // App files: network first, so a new version is used as soon as it is
-    // deployed (the phone app's modules must all come from the same version);
-    // the cached copy is used when the network is slow (4 s) or unavailable.
-    event.respondWith(networkFirst(request));
+    event.respondWith(appFile(request));
   }
   // Everything else (photos, catalog search, pages' data) goes to the network untouched.
 });
@@ -104,17 +88,75 @@ self.addEventListener("message", function (event) {
   }
 });
 
-function networkFirst(request) {
+/* The server (or the proxy in front of it) is down or restarting. */
+function unavailable(response) {
+  return response.status === 502 || response.status === 503 || response.status === 504;
+}
+
+function offlineFallback() {
+  return caches.match(APP_URL, { cacheName: CACHE_NAME }).then(function (app) {
+    return app || caches.match(OFFLINE_URL);
+  });
+}
+
+/* Pages: always the network; the phone app when the server can't be reached. */
+function page(request) {
+  return fetch(request).then(function (response) {
+    if (!unavailable(response)) return response;
+    return offlineFallback().then(function (fallback) { return fallback || response; });
+  }, function () {
+    return offlineFallback();
+  });
+}
+
+/*
+ * App files: the copy cached for this version, so every file the phone app
+ * loads comes from the same deploy. Files not in the precache are fetched once
+ * and kept with this version's copy.
+ */
+function appFile(request) {
   return caches.open(CACHE_NAME).then(function (cache) {
-    var network = fetch(request).then(function (response) {
-      if (response.ok && response.type === "basic") cache.put(request, response.clone());
-      return response;
+    return cache.match(request).then(function (cached) {
+      if (cached) return cached;
+      return fetch(request).then(function (response) {
+        if (response.ok && response.type === "basic") cache.put(request, response.clone());
+        return response;
+      });
     });
-    var timeout = new Promise(function (resolve) { setTimeout(resolve, 4000); });
-    return Promise.race([network.catch(function () { return null; }), timeout]).then(function (response) {
-      if (response) return response;
-      return cache.match(request).then(function (cached) {
-        return cached || network; // nothing cached: keep waiting for the network
+  });
+}
+
+/* A response copy marked with when it was cached (headers of a cached response can't be changed later). */
+function stamped(response) {
+  var headers = new Headers(response.headers);
+  headers.set(CACHED_AT, String(Date.now()));
+  return response.blob().then(function (body) {
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: headers });
+  });
+}
+
+/*
+ * Thumbnails: cached as they are viewed. A cached copy is used while it is
+ * under a week old, or whenever the server can't be reached. A thumbnail the
+ * server no longer serves (photo deleted, or logged out: redirected to the
+ * login page) is removed from the cache.
+ */
+function thumbnail(request) {
+  return caches.open(DATA_CACHE).then(function (cache) {
+    return cache.match(request).then(function (cached) {
+      var age = cached ? Date.now() - Number(cached.headers.get(CACHED_AT) || 0) : Infinity;
+      if (cached && age < THUMB_MAX_AGE_MS) return cached;
+      return fetch(request).then(function (response) {
+        if (response.ok && response.type === "basic" && !response.redirected) {
+          return stamped(response.clone()).then(function (copy) {
+            return cache.put(request, copy);
+          }).then(function () { return response; }, function () { return response; });
+        }
+        if (unavailable(response)) return cached || response;
+        if (cached) return cache.delete(request).then(function () { return response; });
+        return response;
+      }, function () {
+        return cached || Response.error();
       });
     });
   });
