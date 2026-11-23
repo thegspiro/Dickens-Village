@@ -259,3 +259,51 @@ def test_extra_edit_detects_change_made_elsewhere(logged_in, fake_repo):
         "description": "Bulb", "quantity": "1", "version": "1", "csrf_token": csrf(logged_in)})
     assert resp.status_code == 409 and "Quantity: <strong>3</strong>" in resp.get_data(as_text=True)
     assert fake_repo.extras[extra_id]["quantity"] == 3
+
+
+def _save_elsewhere_first(monkeypatch, fake_repo, method, rows, row_id, change):
+    """Make `method` behave as if another device saved `change` just before it ran
+    (after the view's own version check passed)."""
+    original = getattr(fake_repo, method)
+
+    def racing(*args, **kwargs):
+        rows[row_id].update(change)
+        rows[row_id]["version"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(fake_repo, method, racing)
+
+
+def test_edit_does_not_overwrite_a_save_that_lands_during_the_request(logged_in, fake_repo, monkeypatch):
+    item_id = add_item(logged_in, storage_tub="1", condition_grade="good")
+    _save_elsewhere_first(monkeypatch, fake_repo, "update_item", fake_repo.items, item_id, {"storage_tub": "7"})
+    form = {"category": "building", "name": "Fezziwig's Warehouse", "storage_tub": "1",
+            "condition_grade": "fair", "version": "1", "csrf_token": csrf(logged_in)}
+    resp = logged_in.post(f"/items/{item_id}/edit", data=form)
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 409 and "Tub: <strong>7</strong>" in body
+    assert fake_repo.items[item_id]["storage_tub"] == "7"
+    assert fake_repo.items[item_id]["condition_grade"] == "good"  # nothing from the form was saved
+    assert 'name="version" value="2"' in body  # the next save is a deliberate overwrite
+
+
+def test_extra_edit_does_not_overwrite_a_save_that_lands_during_the_request(logged_in, fake_repo, monkeypatch):
+    item_id = add_item(logged_in)
+    logged_in.post(f"/items/{item_id}/extras", data={"description": "Bulb", "csrf_token": csrf(logged_in)})
+    (extra_id,) = fake_repo.extras
+    _save_elsewhere_first(monkeypatch, fake_repo, "update_extra", fake_repo.extras, extra_id, {"quantity": 3})
+    resp = logged_in.post(f"/items/{item_id}/extras/{extra_id}/edit", data={
+        "description": "Bulb", "quantity": "1", "version": "1", "csrf_token": csrf(logged_in)})
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 409 and "Quantity: <strong>3</strong>" in body
+    assert 'name="version" value="2"' in body
+    assert fake_repo.extras[extra_id]["quantity"] == 3
+
+
+def test_edit_form_without_a_version_still_saves(logged_in, fake_repo):
+    item_id = add_item(logged_in, condition_grade="good")
+    fake_repo.items[item_id]["version"] = 5
+    resp = logged_in.post(f"/items/{item_id}/edit", data={
+        "category": "building", "name": "Fezziwig's Warehouse", "condition_grade": "fair",
+        "csrf_token": csrf(logged_in)})
+    assert resp.status_code == 302 and fake_repo.items[item_id]["condition_grade"] == "fair"

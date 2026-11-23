@@ -390,6 +390,28 @@ def test_versions_bump_on_every_update(repo):
     assert repo.get_extra(item_id, extra_id)["version"] == 2
 
 
+def test_update_with_stale_expected_version_writes_nothing(repo):
+    from app.repository import VersionConflict
+
+    item_id = repo.create_item(item(name="Original"))
+    assert repo.update_item(item_id, item(name="First save"), expected_version=1)
+    with pytest.raises(VersionConflict):
+        repo.update_item(item_id, item(name="Stale form"), expected_version=1)
+    row = repo.get_item(item_id)
+    assert (row["name"], row["version"]) == ("First save", 2)
+    assert repo.update_item(item_id, item(name="Fresh form"), expected_version=2)
+    assert repo.update_item(999999, item(), expected_version=1) is False
+
+    extra, _ = parse_extra_form({"description": "Bulb"})
+    extra_id = repo.add_extra(item_id, extra)
+    assert repo.update_extra(item_id, extra_id, {**extra, "quantity": 2}, expected_version=1)
+    with pytest.raises(VersionConflict):
+        repo.update_extra(item_id, extra_id, {**extra, "quantity": 9}, expected_version=1)
+    row = repo.get_extra(item_id, extra_id)
+    assert (row["quantity"], row["version"]) == (2, 2)
+    assert repo.update_extra(item_id + 1, extra_id, extra, expected_version=2) is False
+
+
 def test_create_from_client_is_idempotent(repo):
     first, created = repo.create_item_from_client(item(name="Carolers"), UUID_A)
     again, created_again = repo.create_item_from_client(item(name="Carolers"), UUID_A)

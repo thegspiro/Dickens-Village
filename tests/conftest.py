@@ -15,6 +15,7 @@ from werkzeug.security import generate_password_hash
 
 from app import create_app
 from app.config import load_config
+from app.repository import VersionConflict
 from app.validation import STORAGE_COLUMNS
 
 ADMIN_USER = "gabriel"
@@ -79,9 +80,11 @@ class FakeRepository:
                               "client_uuid": None}
         return new_id
 
-    def update_item(self, item_id: int, data: dict[str, Any]) -> bool:
+    def update_item(self, item_id: int, data: dict[str, Any], expected_version: int | None = None) -> bool:
         if item_id not in self.items:
             return False
+        if expected_version is not None and self.items[item_id]["version"] != expected_version:
+            raise VersionConflict(item_id)
         self.items[item_id].update(data)
         self.items[item_id]["version"] += 1
         return True
@@ -156,9 +159,12 @@ class FakeRepository:
         self.extras[new_id] = {**data, "id": new_id, "item_id": item_id, "version": 1, "client_uuid": None}
         return new_id
 
-    def update_extra(self, item_id: int, extra_id: int, data: dict[str, Any]) -> bool:
+    def update_extra(self, item_id: int, extra_id: int, data: dict[str, Any],
+                     expected_version: int | None = None) -> bool:
         if not self.get_extra(item_id, extra_id):
             return False
+        if expected_version is not None and self.extras[extra_id]["version"] != expected_version:
+            raise VersionConflict(extra_id)
         self.extras[extra_id].update(data)
         self.extras[extra_id]["version"] += 1
         return True

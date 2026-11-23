@@ -34,7 +34,7 @@ from .auth import (
     safe_next_url,
     verify_credentials,
 )
-from .repository import PAGE_SIZE
+from .repository import PAGE_SIZE, VersionConflict
 from .validation import (
     ITEM_BOOL_FIELDS,
     ITEM_COLUMNS,
@@ -116,6 +116,11 @@ def _stale_fields(submitted_version: str | None, row: dict[str, Any], submitted:
         return None
     if int(submitted_version) == int(row.get("version") or 1):
         return None
+    return _changed_fields(submitted, saved)
+
+
+def _changed_fields(submitted: dict[str, Any], saved: dict[str, Any]) -> list[tuple[str, str]]:
+    """The saved values that differ from what was submitted, labelled for the conflict notice."""
     changed = []
     for key, value in saved.items():
         if key in submitted and submitted[key] != value:
@@ -124,6 +129,17 @@ def _stale_fields(submitted_version: str | None, row: dict[str, Any], submitted:
                 shown = "Yes" if value else "No"
             changed.append((_FIELD_LABELS.get(key, key), "(blank)" if shown in (None, "") else str(shown)))
     return changed or [("(no visible fields)", "only the version number changed")]
+
+
+def _submitted_version() -> int | None:
+    """The version the edit form was opened at, or None for a form without one."""
+    raw = request.form.get("version", "")
+    return int(raw) if raw.isdigit() else None
+
+
+def _extra_values(extra: dict[str, Any]) -> dict[str, Any]:
+    return {"description": extra["description"], "quantity": extra["quantity"],
+            "condition_grade": extra["condition_grade"], "notes": extra["notes"]}
 
 
 def _check_catalog_link(data: dict[str, Any], errors: dict[str, str]) -> dict[str, Any] | None:
@@ -365,10 +381,17 @@ def item_edit(item_id: int) -> Any:
         stale = None if errors else _stale_fields(
             request.form.get("version"), item, _row_to_form(data), _row_to_form(item))
         if not errors and not stale:
-            if not repo().update_item(item_id, data):
-                abort(404)
-            flash("Changes saved.", "success")
-            return redirect(url_for("main.item_detail", item_id=item_id))
+            try:
+                saved = repo().update_item(item_id, data, expected_version=_submitted_version())
+            except VersionConflict:
+                # Saved elsewhere between reading the item above and taking the row lock.
+                item = _item_or_404(item_id)
+                stale = _changed_fields(_row_to_form(data), _row_to_form(item))
+            else:
+                if not saved:
+                    abort(404)
+                flash("Changes saved.", "success")
+                return redirect(url_for("main.item_detail", item_id=item_id))
         return (
             render_template(
                 "item_form.html", form=request.form, errors=errors, item=item, catalog=catalog,
@@ -446,14 +469,21 @@ def extra_edit(item_id: int, extra_id: int) -> Any:
     if request.method == "POST":
         check_csrf()
         data, errors = parse_extra_form(request.form)
-        saved = {"description": extra["description"], "quantity": extra["quantity"],
-                 "condition_grade": extra["condition_grade"], "notes": extra["notes"]}
+        saved = _extra_values(extra)
         stale = None if errors else _stale_fields(request.form.get("version"), extra, data, saved)
         if not errors and not stale:
-            if not repo().update_extra(item_id, extra_id, data):
-                abort(404)
-            flash("Extra updated.", "success")
-            return redirect(url_for("main.item_detail", item_id=item_id) + "#extras")
+            try:
+                found = repo().update_extra(item_id, extra_id, data, expected_version=_submitted_version())
+            except VersionConflict:
+                extra = repo().get_extra(item_id, extra_id)
+                if extra is None:
+                    abort(404)
+                stale = _changed_fields(data, _extra_values(extra))
+            else:
+                if not found:
+                    abort(404)
+                flash("Extra updated.", "success")
+                return redirect(url_for("main.item_detail", item_id=item_id) + "#extras")
         return render_template("extra_form.html", item=item, extra=extra, form=request.form, errors=errors,
                                version=extra.get("version"), stale=stale), 409 if stale else 400
     form = {
