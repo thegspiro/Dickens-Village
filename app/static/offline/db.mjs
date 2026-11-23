@@ -7,7 +7,35 @@
 
 export const DB_NAME = "dickens-offline";
 const DB_VERSION = 1;
+const ENABLED_KEY = "dickens-offline-enabled";
 let dbPromise = null;
+let enabledHere = false; // fallback for when localStorage can't be used
+
+/* The phone's copy was erased (logged out) and offline use hasn't been turned on again. */
+export class StorageErased extends Error {}
+
+/*
+ * Offline use is turned on when the phone app is opened and off when the copy
+ * is erased. The database is only ever created while it is on, so a sync that
+ * was still running in another tab during logout can't bring the data back.
+ */
+export function enableOffline() {
+  enabledHere = true;
+  try { localStorage.setItem(ENABLED_KEY, "1"); } catch (e) { /* private mode: enabledHere covers this page */ }
+}
+
+export function disableOffline() {
+  enabledHere = false;
+  try { localStorage.removeItem(ENABLED_KEY); } catch (e) { /* blocked */ }
+}
+
+export function offlineEnabled() {
+  try {
+    return localStorage.getItem(ENABLED_KEY) === "1"; // shared by every tab, so a logout elsewhere counts
+  } catch (e) {
+    return enabledHere;
+  }
+}
 
 /*
  * Stores and indexes, by the database version that added them. An upgrade
@@ -36,7 +64,15 @@ function open() {
   dbPromise = new Promise(function (resolve, reject) {
     var settled = false;
     var req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = function () { upgrade(req.result, req.transaction); };
+    var refused = false;
+    req.onupgradeneeded = function (event) {
+      if (event.oldVersion === 0 && !offlineEnabled()) {
+        refused = true; // would create the database: not while offline use is off
+        req.transaction.abort();
+        return;
+      }
+      upgrade(req.result, req.transaction);
+    };
     req.onsuccess = function () {
       var db = req.result;
       if (settled) { db.close(); return; } // gave up on this open (blocked); the next call opens again
@@ -44,7 +80,12 @@ function open() {
       db.onversionchange = function () { db.close(); dbPromise = null; };
       resolve(db);
     };
-    req.onerror = function () { settled = true; dbPromise = null; reject(req.error); };
+    req.onerror = function (event) {
+      if (event && event.preventDefault) event.preventDefault();
+      settled = true;
+      dbPromise = null;
+      reject(refused ? new StorageErased("This phone's copy was erased.") : req.error);
+    };
     req.onblocked = function () {
       // Another tab still has the older version open. Don't leave a failed open
       // cached: the next storage call tries again.

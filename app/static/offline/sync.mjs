@@ -32,8 +32,7 @@ export function isRunning() {
 async function runSync() {
   emit("syncing");
   try {
-    var session = await api.call("GET", "/session");
-    api.setToken(session.data.csrf_token);
+    var session = await api.refreshToken();
     await db.setMeta("session", { user: session.data.user, choices: session.data.choices });
     await db.setMeta("authExpired", false);
     await pushItems();
@@ -47,10 +46,12 @@ async function runSync() {
     return counts;
   } catch (err) {
     var counts2 = await countPending().catch(function () { return {}; });
-    if (err instanceof api.OfflineError) {
+    if (err instanceof db.StorageErased) {
+      emit("erased", counts2); // logged out in another tab while this one was syncing
+    } else if (err instanceof api.OfflineError) {
       emit("offline", counts2);
     } else if (err instanceof api.AuthError) {
-      await db.setMeta("authExpired", true);
+      await db.setMeta("authExpired", true).catch(function () {});
       emit("login", counts2);
     } else {
       if (window.console) console.error("Sync failed", err);
