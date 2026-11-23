@@ -65,41 +65,62 @@ function validationError(res) {
     errors: (res.data && res.data.errors) || null };
 }
 
-async function pushItems() {
-  var items = await db.all("items");
-  for (var i = 0; i < items.length; i++) {
-    var rec = items[i];
-    if (m.needsAttention(rec)) continue; // waits for the person to fix or resolve it
-    if (rec.id == null) {
-      var fields = Object.assign({}, rec.local);
-      var res = await api.call("POST", "/items", { client_uuid: rec.client_uuid, fields: fields });
-      var fresh = (await db.get("items", rec.key)) || rec;
+/*
+ * Store the outcome of a request against the record as it is now (re-read in the
+ * same transaction), never against the copy read before the request was sent:
+ * the person may have edited it in the meantime. Resolves to the stored record.
+ */
+function settle(store, key, fn) {
+  return db.update(store, key, function (current) {
+    return current ? fn(current) : undefined; // discarded while the request was out
+  });
+}
+
+/*
+ * Send one piece or extra: create it if the server doesn't have it, then send
+ * its edits. A record that a create or a recognised own-write conflict leaves
+ * with edits still to send gets one more patch in this same sync.
+ */
+async function pushRecord(store, fields, key, collectionPath, field) {
+  var rec = await db.get(store, key);
+  if (!rec || m.needsAttention(rec)) return; // waits for the person to fix or resolve it
+  if (rec.id == null) {
+    var sent = Object.assign({}, rec.local);
+    rec = await settle(store, key, function (current) { return m.markCreateSent(current, sent); });
+    if (!rec) return;
+    var res = await api.call("POST", collectionPath, { client_uuid: rec.client_uuid, fields: sent });
+    rec = await settle(store, key, function (current) {
       if (res.status === 200 || res.status === 201) {
-        await db.put("items", Object.assign(m.afterCreate(fresh, fields, res.data.item, m.ITEM_FIELDS),
-          { photos: fresh.photos || [] }));
-      } else {
-        fresh.error = validationError(res);
-        await db.put("items", fresh);
+        return m.afterCreate(current, sent, res.data[field], fields, res.data.created);
       }
-    } else if (Object.keys(rec.dirty).length) {
-      var payload = m.patchPayload(rec);
-      var res2 = await api.call("PATCH", "/items/" + rec.id, payload);
-      var fresh2 = (await db.get("items", rec.key)) || rec;
-      if (res2.status === 200) {
-        await db.put("items", m.afterPatch(fresh2, payload.changes, res2.data.item, m.ITEM_FIELDS));
-      } else if (res2.status === 409) {
-        await db.put("items", m.afterConflict(fresh2, res2.data.conflicts, res2.data.item, m.ITEM_FIELDS));
-      } else {
-        fresh2.error = validationError(res2);
-        await db.put("items", fresh2);
-      }
-    }
+      return Object.assign(current, { error: validationError(res) });
+    });
+  }
+  for (var attempt = 0; attempt < 2 && rec && rec.id != null && !m.needsAttention(rec) &&
+       Object.keys(rec.dirty).length; attempt++) {
+    var payload = m.patchPayload(rec);
+    rec = await settle(store, key, function (current) { return m.markSent(current, payload.changes); });
+    if (!rec) return;
+    var res2 = await api.call("PATCH", collectionPath + "/" + rec.id, payload);
+    rec = await settle(store, key, function (current) {
+      if (res2.status === 200) return m.afterPatch(current, payload.changes, res2.data[field], fields);
+      if (res2.status === 409) return m.afterConflict(current, res2.data.conflicts, res2.data[field], fields);
+      return Object.assign(current, { error: validationError(res2) });
+    });
   }
 }
 
+async function pushItems() {
+  var items = await db.all("items");
+  for (var i = 0; i < items.length; i++) {
+    await pushRecord("items", m.ITEM_FIELDS, items[i].key, "/items", "item");
+  }
+}
+
+/* The server id of an extra's or photo's piece; undefined if the piece is gone from the phone. */
 async function itemIdFor(itemKey) {
   var item = await db.get("items", itemKey);
-  return item ? item.id : null;
+  return item ? item.id : undefined;
 }
 
 async function pushExtras() {
@@ -108,30 +129,12 @@ async function pushExtras() {
     var rec = extras[i];
     if (m.needsAttention(rec)) continue;
     var itemId = await itemIdFor(rec.itemKey);
-    if (itemId == null) continue; // its piece hasn't been uploaded yet
-    if (rec.id == null) {
-      var fields = Object.assign({}, rec.local);
-      var res = await api.call("POST", "/items/" + itemId + "/extras", { client_uuid: rec.client_uuid, fields: fields });
-      var fresh = (await db.get("extras", rec.key)) || rec;
-      if (res.status === 200 || res.status === 201) {
-        await db.put("extras", m.afterCreate(fresh, fields, res.data.extra, m.EXTRA_FIELDS));
-      } else {
-        fresh.error = validationError(res);
-        await db.put("extras", fresh);
-      }
-    } else if (Object.keys(rec.dirty).length) {
-      var payload = m.patchPayload(rec);
-      var res2 = await api.call("PATCH", "/items/" + itemId + "/extras/" + rec.id, payload);
-      var fresh2 = (await db.get("extras", rec.key)) || rec;
-      if (res2.status === 200) {
-        await db.put("extras", m.afterPatch(fresh2, payload.changes, res2.data.extra, m.EXTRA_FIELDS));
-      } else if (res2.status === 409) {
-        await db.put("extras", m.afterConflict(fresh2, res2.data.conflicts, res2.data.extra, m.EXTRA_FIELDS));
-      } else {
-        fresh2.error = validationError(res2);
-        await db.put("extras", fresh2);
-      }
+    if (itemId === undefined) {
+      await settle("extras", rec.key, function (current) { return m.orphaned(current); });
+      continue;
     }
+    if (itemId == null) continue; // its piece hasn't been uploaded yet
+    await pushRecord("extras", m.EXTRA_FIELDS, rec.key, "/items/" + itemId + "/extras", "extra");
   }
 }
 
@@ -141,22 +144,25 @@ async function pushPhotos() {
     var p = pending[i];
     if (p.error) continue;
     var itemId = await itemIdFor(p.itemKey);
+    if (itemId === undefined) {
+      await settle("photos", p.key, function (current) { return m.orphaned(current); });
+      continue;
+    }
     if (itemId == null) continue;
     var form = new FormData();
     form.append("client_uuid", p.client_uuid);
     form.append("photo", p.blob, p.name || "photo.jpg");
     var res = await api.call("POST", "/items/" + itemId + "/photos", form);
     if (res.status === 200 || res.status === 201) {
-      var item = await db.get("items", p.itemKey);
-      if (item) {
-        item.photos = (item.photos || []).filter(function (x) { return x.id !== res.data.photo.id; });
-        item.photos.push({ id: res.data.photo.id, client_uuid: p.client_uuid });
-        await db.put("items", item);
-      }
+      var photo = res.data.photo;
+      await settle("items", p.itemKey, function (item) {
+        item.photos = (item.photos || []).filter(function (x) { return x.id !== photo.id; });
+        item.photos.push({ id: photo.id, client_uuid: p.client_uuid });
+        return item;
+      });
       await db.del("photos", p.key);
     } else {
-      p.error = validationError(res);
-      await db.put("photos", p);
+      await settle("photos", p.key, function (current) { return Object.assign(current, { error: validationError(res) }); });
     }
   }
 }
@@ -166,18 +172,31 @@ async function pullSnapshot() {
   var res = await api.call("GET", "/snapshot", undefined, { etag: etag });
   if (res.status === 304) return;
   var rows = res.data.items;
-  var items = await db.all("items");
-  var merged = m.mergeSnapshot(items, rows, m.ITEM_FIELDS, "", function (row) { return { photos: row.photos, scans: row.scans || [] }; });
-  await db.apply("items", merged.put, merged.remove);
+  // Read, merge and write in one transaction so an edit saved meanwhile isn't overwritten.
+  var merged = await db.mergeAll("items", function (items) {
+    return m.mergeSnapshot(items, rows, m.ITEM_FIELDS, "", function (row) {
+      return { photos: row.photos, scans: row.scans || [] };
+    });
+  });
+  var removed = {};
+  merged.remove.forEach(function (k) { removed[k] = true; });
 
   var keyById = {};
   merged.put.forEach(function (rec) { if (rec.id != null) keyById[rec.id] = rec.key; });
   var extraRows = [];
   rows.forEach(function (row) { (row.extras || []).forEach(function (e) { extraRows.push(e); }); });
-  var extras = await db.all("extras");
-  var mergedExtras = m.mergeSnapshot(extras, extraRows, m.EXTRA_FIELDS, "e",
-    function (row) { return { itemKey: keyById[row.item_id] }; });
-  await db.apply("extras", mergedExtras.put, mergedExtras.remove);
+  await db.mergeAll("extras", function (extras) {
+    var out = m.mergeSnapshot(extras, extraRows, m.EXTRA_FIELDS, "e",
+      function (row) { return { itemKey: keyById[row.item_id] }; });
+    // Unsent extras of a piece that was just removed can never be saved: say so.
+    extras.forEach(function (rec) {
+      if (rec.id == null && removed[rec.itemKey] && !rec.error) out.put.push(m.orphaned(rec));
+    });
+    return out;
+  });
+  await db.mergeAll("photos", function (photos) {
+    return { put: photos.filter(function (p) { return removed[p.itemKey] && !p.error; }).map(m.orphaned), remove: [] };
+  });
   await db.setMeta("snapshotEtag", res.etag);
 }
 
