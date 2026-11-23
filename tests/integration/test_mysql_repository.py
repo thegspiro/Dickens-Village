@@ -652,3 +652,27 @@ def test_entries_removed_from_the_csv_are_unlisted_not_deleted(db_config, repo):
         conn.close()
     assert repo.get_catalog_item(entry["id"])["listed"] == 1
     assert any(e["id"] == entry["id"] for e in repo.search_catalog("56.65161"))
+
+
+def test_export_data_reads_everything_consistently(db_config, repo):
+    building = repo.create_item(item(name="Export building"))
+    figure_data = item(name="Export figure")
+    figure_data["category"] = "figure"
+    figure = repo.create_item(figure_data)
+    assert repo.add_link(building, figure)
+    extra, _ = parse_extra_form({"description": "Bulb", "quantity": "2"})
+    repo.add_extra(building, extra)
+    photo = repo.add_photo(building, "e" * 32 + ".jpg", "front.jpg")
+    repo.set_photo_caption(photo, "Front")
+    repo.add_scan(building, "f" * 32 + ".glb", "scan.glb", 99)
+    data = repo.export_data()
+    assert {"items", "extras", "links", "photos", "scans", "catalog_photos"} == set(data)
+    names = {r["id"]: r["name"] for r in data["items"]}
+    assert names[building] == "Export building" and "catalog_item_number" in data["items"][0]
+    assert {"building_id": building, "item_id": figure} in data["links"]
+    assert any(p["id"] == photo and p["caption"] == "Front" and p["sort_order"] == 0 for p in data["photos"])
+    assert any(s["filename"] == "f" * 32 + ".glb" for s in data["scans"])
+    assert any(e["item_id"] == building and e["quantity"] == 2 for e in data["extras"])
+    # the connection is usable for writes afterwards (the read-only snapshot ended)
+    repo.update_item(building, item(name="Renamed after export"))
+    assert repo.get_item(building)["name"] == "Renamed after export"

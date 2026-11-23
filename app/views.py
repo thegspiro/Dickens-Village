@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import math
 from decimal import Decimal
@@ -24,7 +25,7 @@ from flask import (
     url_for,
 )
 
-from . import photos, scans
+from . import export, photos, scans
 from .auth import (
     check_csrf,
     current_user,
@@ -893,3 +894,40 @@ def storage() -> Any:
 @login_required
 def summary() -> Any:
     return render_template("summary.html", summary=repo().collection_summary())
+
+
+# -- export ------------------------------------------------------------------
+
+_EXPORTS = {
+    "collection.json": "application/json",
+    "pieces.csv": "text/csv",
+    "extras.csv": "text/csv",
+    "photos-and-scans.zip": "application/zip",
+}
+
+
+@bp.get("/export/<name>")
+@login_required
+def export_file(name: str) -> Any:
+    mimetype = _EXPORTS.get(name)
+    if mimetype is None:
+        abort(404)
+    now = dt.datetime.now().replace(microsecond=0)
+    data = repo().export_data()
+    stem, ext = name.rsplit(".", 1)
+    download = f"dickens-village-{stem}-{now:%Y-%m-%d}.{ext}"
+    if name == "collection.json":
+        body: Any = json.dumps(export.collection_json(data, now), indent=2, ensure_ascii=False)
+    elif name == "pieces.csv":
+        body = export.pieces_csv(data)
+    elif name == "extras.csv":
+        body = export.extras_csv(data)
+    else:
+        body = export.zip_stream(data, _upload_dir(), now)
+    log.info("Export %s: %d pieces", name, len(data["items"]))
+    response = current_app.response_class(body, mimetype=mimetype)
+    if name.endswith(".csv") or name.endswith(".json"):
+        response.charset = "utf-8"
+    response.headers["Content-Disposition"] = f'attachment; filename="{download}"'
+    response.headers["Cache-Control"] = "private, no-store"
+    return response

@@ -684,6 +684,35 @@ class MySQLRepository:
         self._end_read()
         return rows
 
+    # -- export ------------------------------------------------------------------
+
+    def export_data(self) -> dict[str, list[dict[str, Any]]]:
+        """Everything a full export needs, read in one transaction so it is consistent."""
+        self._conn.commit()  # start a fresh snapshot
+        with self._conn.cursor() as cur:
+            cur.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
+        try:
+            data = {
+                "items": self._all(
+                    "SELECT i.*, c.item_number AS catalog_item_number, c.name AS catalog_name "
+                    "FROM items i LEFT JOIN catalog_items c ON c.id = i.catalog_id ORDER BY i.id"),
+                "extras": self._all("SELECT * FROM item_extras ORDER BY item_id, id"),
+                "links": self._all("SELECT building_id, item_id FROM item_links ORDER BY building_id, item_id"),
+                "photos": self._all(
+                    "SELECT id, item_id, filename, original_name, sort_order, caption, created_at "
+                    "FROM item_photos ORDER BY item_id, sort_order, id"),
+                "scans": self._all(
+                    "SELECT id, item_id, filename, original_name, size_bytes, created_at "
+                    "FROM item_scans ORDER BY item_id, id"),
+                "catalog_photos": self._all(
+                    "SELECT p.id, p.catalog_id, p.filename, p.original_name, p.sort_order, p.caption, p.created_at, "
+                    "c.item_number, c.name FROM catalog_photos p JOIN catalog_items c ON c.id = p.catalog_id "
+                    "ORDER BY p.catalog_id, p.sort_order, p.id"),
+            }
+        finally:
+            self._end_read()
+        return data
+
     # -- upload housekeeping ------------------------------------------------------
 
     def upload_filenames(self) -> set[str]:

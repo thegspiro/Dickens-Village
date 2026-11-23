@@ -86,6 +86,15 @@ If you expose the app beyond your home network, put it behind a reverse proxy wi
 
 The same image runs on ECS or EC2. It needs MySQL 8.0.19 or newer (the catalog import uses the `INSERT … AS new` syntax). Point `DB_HOST`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` at an RDS MySQL 8 instance, and mount persistent storage (e.g. EFS) at `/data/uploads`. Photos are stored on disk only. S3 storage is not implemented.
 
+## Exporting your collection
+
+The **Summary** page has download links for:
+- **Pieces (CSV)** and **Extras (CSV)**: one row per piece or extra, for Excel, Numbers or Google Sheets. Cells that a spreadsheet would treat as a formula start with `'`.
+- **Everything (JSON)**: pieces with their extras, links, photos (with captions, in order) and scans.
+- **Photos and 3D scans (zip)**: every photo and scan at full size, in a folder per piece (and per catalog entry for reference photos), plus the files above. It is streamed, so it can be large without using much memory on the server.
+
+These are copies for you to keep or use elsewhere; for a restorable backup, see below.
+
 ## Backups
 
 ```sh
