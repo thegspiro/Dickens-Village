@@ -40,7 +40,7 @@ Python 3.13 and Flask, with server-rendered HTML and no JavaScript. Data lives i
    Paste the printed `ADMIN_PASSWORD_HASH='…'` line into `.env`. Keep the single quotes, because the hash contains `$`.
 4. Start the app: `docker compose up -d`. Then open `http://<server>:<APP_PORT>`.
 
-On startup the app applies any pending database migrations, then starts the web server. The database is not published on any host port.
+On startup the app applies any pending database migrations, then starts the web server. The database is not published on any host port. The web server runs `GUNICORN_WORKERS` processes (default 2) with `GUNICORN_THREADS` threads each (default 4), so a slow upload never blocks the rest of the site.
 
 ### Unraid
 

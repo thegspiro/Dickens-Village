@@ -14,7 +14,6 @@ import os
 import re
 import secrets
 import tempfile
-import warnings
 from pathlib import Path
 from typing import IO
 
@@ -43,31 +42,34 @@ class PhotoError(ValueError):
 
 
 def _open_checked(stream: IO[bytes]) -> Image.Image:
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", Image.DecompressionBombWarning)
-        try:
-            probe = Image.open(stream)
-            if probe.format not in ALLOWED_FORMATS:
-                raise PhotoError("Upload a JPEG, PNG or WebP image.")
-            pixels = probe.width * probe.height
-            limit = MAX_JPEG_PIXELS if probe.format == "JPEG" else MAX_PIXELS
-            if pixels > limit:
-                raise PhotoError(f"That image is too large (over {limit // 1_000_000} megapixels).")
-            probe.verify()
-            stream.seek(0)
-            image = Image.open(stream)
-            if image.format == "JPEG":
-                # Decode at 1/2, 1/4 or 1/8 scale when that still gives at least
-                # MAX_EDGE pixels on the long side; the result is resized anyway.
-                image.draft("RGB", (MAX_EDGE, MAX_EDGE))
-            image.load()
-            return image
-        except PhotoError:
-            raise
-        except (UnidentifiedImageError, Image.DecompressionBombWarning, Image.DecompressionBombError):
-            raise PhotoError("That file is not a supported image.") from None
-        except (OSError, SyntaxError, ValueError):
-            raise PhotoError("That image file appears to be damaged.") from None
+    # The size limits are checked explicitly from the header, before anything is
+    # decoded, rather than by turning Pillow's DecompressionBombWarning into an
+    # error with warnings.catch_warnings(): that changes process-wide state and
+    # is not safe with gunicorn's threaded workers. Pillow still raises
+    # DecompressionBombError by itself above twice MAX_IMAGE_PIXELS.
+    try:
+        probe = Image.open(stream)
+        if probe.format not in ALLOWED_FORMATS:
+            raise PhotoError("Upload a JPEG, PNG or WebP image.")
+        pixels = probe.width * probe.height
+        limit = MAX_JPEG_PIXELS if probe.format == "JPEG" else MAX_PIXELS
+        if pixels > limit:
+            raise PhotoError(f"That image is too large (over {limit // 1_000_000} megapixels).")
+        probe.verify()
+        stream.seek(0)
+        image = Image.open(stream)
+        if image.format == "JPEG":
+            # Decode at 1/2, 1/4 or 1/8 scale when that still gives at least
+            # MAX_EDGE pixels on the long side; the result is resized anyway.
+            image.draft("RGB", (MAX_EDGE, MAX_EDGE))
+        image.load()
+        return image
+    except PhotoError:
+        raise
+    except (UnidentifiedImageError, Image.DecompressionBombError):
+        raise PhotoError("That file is not a supported image.") from None
+    except (OSError, SyntaxError, ValueError):
+        raise PhotoError("That image file appears to be damaged.") from None
 
 
 def check_size(stream: IO[bytes], max_bytes: int) -> None:
