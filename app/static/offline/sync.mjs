@@ -198,6 +198,24 @@ async function pullSnapshot() {
     return { put: photos.filter(function (p) { return removed[p.itemKey] && !p.error; }).map(m.orphaned), remove: [] };
   });
   await db.setMeta("snapshotEtag", res.etag);
+  await pruneThumbnails(rows);
+}
+
+/* Forget cached thumbnails of photos the server no longer has (deleted elsewhere). */
+async function pruneThumbnails(rows) {
+  if (typeof caches === "undefined") return;
+  var keep = {};
+  rows.forEach(function (row) { (row.photos || []).forEach(function (p) { keep[p.id] = true; }); });
+  try {
+    var cache = await caches.open("dickens-data-v1");
+    var requests = await cache.keys();
+    await Promise.all(requests.map(function (req) {
+      var match = /^\/photos\/(\d+)\/thumb$/.exec(new URL(req.url).pathname);
+      return match && !keep[match[1]] ? cache.delete(req) : null;
+    }));
+  } catch (err) {
+    if (window.console) console.warn("Couldn't tidy cached photos", err);
+  }
 }
 
 async function pullCatalog() {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import logging
 from pathlib import Path
 from decimal import Decimal
@@ -39,6 +40,28 @@ def _date(value: Any) -> str:
     if isinstance(value, (dt.date, dt.datetime)):
         return f"{value:%b} {value.day}, {value.year}"
     return "" if value is None else str(value)
+
+
+# Files the service worker caches for offline use, besides app/static itself.
+_OFFLINE_TEMPLATES = ("offline_app.html", "offline.html")
+
+
+def static_build_id(static_dir: Path, template_dir: Path) -> str:
+    """A short hash of the app's own static files and offline templates.
+
+    The service worker is served with it as its cache version, so every deploy
+    that changes one of these files makes phones fetch a fresh, consistent copy.
+    The vendored 3D viewer is left out: the service worker doesn't cache it.
+    """
+    digest = hashlib.sha256()
+    files = [p for p in static_dir.rglob("*") if p.is_file() and "vendor" not in p.relative_to(static_dir).parts]
+    files += [template_dir / name for name in _OFFLINE_TEMPLATES]
+    for path in sorted(files):
+        base = static_dir if path.is_relative_to(static_dir) else template_dir
+        digest.update(str(path.relative_to(base)).encode("utf-8") + b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 def create_app(config: Config | None = None, repo_factory: RepoFactory | None = None) -> Flask:
@@ -82,6 +105,8 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
         CATEGORIES=CATEGORIES,
         CONDITIONS=CONDITIONS,
     )
+
+    app.config["STATIC_BUILD"] = static_build_id(Path(app.static_folder), Path(app.root_path) / "templates")
 
     viewer = Path(app.static_folder) / "vendor" / "model-viewer" / "model-viewer.min.js"
     app.config["MODEL_VIEWER_AVAILABLE"] = viewer.is_file()
