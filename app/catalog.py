@@ -6,9 +6,11 @@ Usage:
 
 The import is an upsert keyed on source_key, so running it again (it runs on
 every container start) only updates rows whose CSV values changed. Rows that
-disappear from a CSV are left in place, because collection items may link to
-them. Every row is validated before anything is written; one bad row aborts
-the whole import and nothing is changed.
+disappear from the CSVs are not deleted, because collection items and
+reference photos may belong to them: they are marked listed = 0, which hides
+them from the lookup, and listed again if they come back. Every row is
+validated before anything is written; one bad row aborts the whole import and
+nothing is changed.
 """
 
 from __future__ import annotations
@@ -177,12 +179,18 @@ _UPSERT_SQL = (
     f"VALUES ({', '.join(['%s'] * len(COLUMNS))}) AS new "
     "ON DUPLICATE KEY UPDATE "
     + ", ".join(f"{c} = new.{c}" for c in COLUMNS if c != "source_key")
+    + ", listed = 1"
 )
 
 
 def sync(conn: Any, rows: Iterable[CatalogRow], batch_size: int = 200) -> int:
-    """Upsert rows in one transaction, under a named lock. Returns rows sent."""
+    """Upsert rows and unlist entries no longer in them, in one transaction under
+    a named lock. Returns rows sent."""
     rows = list(rows)
+    if not rows:
+        # Most likely a missing or empty catalog folder: importing nothing would
+        # unlist the whole catalog.
+        raise CatalogError("No catalog rows to import; refusing to mark every catalog entry as removed")
     with conn.cursor() as cur:
         cur.execute("SELECT GET_LOCK(%s, %s) AS got", (LOCK_NAME, LOCK_TIMEOUT_SECONDS))
         got = cur.fetchone()
@@ -192,7 +200,16 @@ def sync(conn: Any, rows: Iterable[CatalogRow], batch_size: int = 200) -> int:
         with conn.cursor() as cur:
             for start in range(0, len(rows), batch_size):
                 cur.executemany(_UPSERT_SQL, [r.as_tuple() for r in rows[start:start + batch_size]])
+            keys = [r.values["source_key"] for r in rows]
+            cur.execute(
+                f"UPDATE catalog_items SET listed = 0 WHERE listed = 1 AND source_key NOT IN "
+                f"({', '.join(['%s'] * len(keys))})",
+                keys,
+            )
+            unlisted = cur.rowcount
         conn.commit()
+        if unlisted:
+            log.warning("%d catalog entries are no longer in the CSVs and were unlisted", unlisted)
     except Exception:
         conn.rollback()
         raise

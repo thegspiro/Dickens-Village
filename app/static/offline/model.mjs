@@ -323,6 +323,7 @@ export function searchCatalog(entries, query, limit) {
   var digits = q.replace(/\D/g, "");
   var hits = [];
   entries.forEach(function (e) {
+    if (e.listed === false) return; // removed from the reference lists: kept only for pieces linked to it
     var num = String(e.item_number || "").toLowerCase();
     var name = String(e.name || "").toLowerCase();
     var rank = -1;

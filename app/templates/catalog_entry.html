@@ -8,6 +8,10 @@
     <a class="button" href="{{ url_for('main.item_new', catalog_id=entry.id) }}">Add to my collection</a>
   </div>
 </div>
+{% if not entry.listed %}
+<p class="flash flash-pending" role="note">This entry is no longer in the reference catalog lists, so it doesn't show in the lookup.
+It is kept because pieces or photos may belong to it.</p>
+{% endif %}
 
 <div class="columns">
   <section class="card">

@@ -183,6 +183,7 @@ def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
         "year_issued": row["year_issued"],
         "year_retired": row["year_retired"],
         "is_current": bool(row["is_current"]),
+        "listed": bool(row.get("listed", 1)),
         "srp_usd": money(row["srp_usd"]),
         "srp_cad": money(row["srp_cad"]),
         "category": row["default_category"],

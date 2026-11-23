@@ -46,7 +46,7 @@ _PHOTOS_FINGERPRINT = (
 
 _CATALOG_FIELDS = (
     "c.id, c.list_name, c.item_number, c.name, c.details, c.series, c.year_issued, "
-    "c.year_retired, c.is_current, c.srp_usd, c.srp_cad, c.default_category, "
+    "c.year_retired, c.is_current, c.listed, c.srp_usd, c.srp_cad, c.default_category, "
     "p.name AS parent_name, p.item_number AS parent_item_number, "
     "(SELECT cp.id FROM catalog_photos cp WHERE cp.catalog_id = c.id ORDER BY cp.sort_order, cp.id LIMIT 1) AS photo_id, "
     "(SELECT COUNT(*) FROM catalog_photos cp WHERE cp.catalog_id = c.id) AS photo_count"
@@ -281,7 +281,8 @@ class MySQLRepository:
 
     def catalog_etag(self) -> str:
         row = self._one(
-            "SELECT (SELECT CONCAT_WS(':', COUNT(*), COALESCE(MAX(updated_at), '')) FROM catalog_items) AS c, "
+            "SELECT (SELECT CONCAT_WS(':', COUNT(*), COALESCE(MAX(updated_at), ''), COALESCE(SUM(listed), 0)) "
+            "FROM catalog_items) AS c, "
             f"(SELECT {_PHOTOS_FINGERPRINT} FROM catalog_photos) AS p"
         )
         self._end_read()
@@ -593,7 +594,8 @@ class MySQLRepository:
     # -- reference catalog ----------------------------------------------------
 
     def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
-        """Find catalog entries by item number (ranked first) or name."""
+        """Find catalog entries by item number (ranked first) or name; entries
+        removed from the CSVs (listed = 0) are left out."""
         query = " ".join(query.split())[:100]
         if len(query) < 2:
             return []
@@ -609,7 +611,7 @@ class MySQLRepository:
         sql = (
             f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
             "LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
-            f"WHERE {' OR '.join(where)} "
+            f"WHERE c.listed = 1 AND ({' OR '.join(where)}) "
             "ORDER BY CASE "
             "  WHEN c.item_number = %s THEN 0 "
             "  WHEN c.item_number LIKE %s THEN 1 "
