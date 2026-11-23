@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_gallery.html" import gallery %}
 {% from "_macros.html" import condition_badge, storage_text, text, select, field_error, dims %}
 {% block title %}{{ item.name }}{% endblock %}
 {% block content %}
@@ -46,17 +47,8 @@
   <section class="card" id="photos">
     <h2>Photos</h2>
     {% if photos %}
-    <div class="photos">
-      {% for p in photos %}
-      <figure>
-        <a href="{{ url_for('main.photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.photo_thumb', photo_id=p.id) }}" alt="Photo of {{ item.name }}" loading="lazy"></a>
-        <form method="post" action="{{ url_for('main.photo_delete', photo_id=p.id) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="link danger">Remove</button>
-        </form>
-      </figure>
-      {% endfor %}
-    </div>
+    <p class="hint">Tap a photo to see it full size.{% if photos|length > 1 %} The first one is the cover; drag photos (or use Edit) to change the order.{% endif %}</p>
+    {{ gallery(photos, 'item', item.id, 'Photo of ' ~ item.name) }}
     {% else %}<p class="muted">No photos of your piece yet.</p>{% endif %}
     <form method="post" action="{{ url_for('main.photo_add', item_id=item.id) }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -72,11 +64,7 @@
     {% if catalog %}
     <h3>Catalog reference photos</h3>
     {% if catalog_photos %}
-    <div class="photos">
-      {% for p in catalog_photos %}
-      <figure><a href="{{ url_for('main.catalog_photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.catalog_photo_thumb', photo_id=p.id) }}" alt="Catalog photo of {{ catalog.name }}" loading="lazy"></a></figure>
-      {% endfor %}
-    </div>
+    {{ gallery(catalog_photos, 'catalog', catalog.id, 'Catalog photo of ' ~ catalog.name, manage=False) }}
     {% else %}<p class="muted">None yet.</p>{% endif %}
     <p><a href="{{ url_for('main.catalog_entry', catalog_id=catalog.id) }}#photos">Manage catalog photos</a></p>
     {% endif %}

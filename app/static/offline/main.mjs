@@ -11,6 +11,7 @@ import * as m from "./model.mjs";
 import { events, sync, countPending, isRunning } from "./sync.mjs";
 import * as account from "./logout.mjs";
 import { refreshToken } from "./api.mjs";
+import { openViewer } from "../gallery.mjs";
 
 var root = document.getElementById("app");
 var pill = document.getElementById("sync-pill");
@@ -295,6 +296,17 @@ async function pieceView(key) {
     v.notes ? ["Notes", v.notes] : null,
   ].filter(Boolean);
 
+  // Full size when online; the cached thumbnail when not. Photos waiting to upload come last.
+  function viewerItems() {
+    return (rec.photos || []).map(function (p) {
+      return { src: "/photos/" + Number(p.id), fallback: "/photos/" + Number(p.id) + "/thumb",
+        caption: p.caption || "", alt: "Photo of " + (v.name || "piece"),
+        download: navigator.onLine ? "/photos/" + Number(p.id) : null };
+    }).concat(pending.map(function (p) {
+      return { src: URL.createObjectURL(p.blob), caption: "Waiting to upload", alt: "Photo waiting to upload" };
+    }));
+  }
+
   var fileInput = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true,
     "aria-label": "Choose photos", onchange: function () { addPhotos(key, fileInput.files); } });
   var camInput = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", capture: "environment",
@@ -319,13 +331,23 @@ async function pieceView(key) {
     h("section", { class: "card" },
       h("h2", null, "Photos"),
       h("div", { class: "photos" },
-        (rec.photos || []).map(function (p) {
-          return h("figure", null, h("img", { src: "/photos/" + Number(p.id) + "/thumb", alt: "Photo of " + (v.name || "piece"),
-            loading: "lazy", onerror: function (e) { e.target.replaceWith(h("span", { class: "photo-missing" }, "Shows when online")); } }));
+        (rec.photos || []).map(function (p, i) {
+          var thumb = "/photos/" + Number(p.id) + "/thumb";
+          return h("figure", null,
+            h("a", { class: "photo-link", href: "/photos/" + Number(p.id), onclick: function (e) {
+              e.preventDefault();
+              openViewer(viewerItems(), i, e.currentTarget);
+            } }, h("img", { src: thumb, alt: p.caption || "Photo of " + (v.name || "piece"), loading: "lazy",
+              onerror: function (e) { e.target.replaceWith(h("span", { class: "photo-missing" }, "Shows when online")); } })),
+            i === 0 && rec.photos.length > 1 ? h("span", { class: "badge cover-badge" }, "Cover") : null,
+            p.caption ? h("figcaption", null, p.caption) : null);
         }),
-        pending.map(function (p) {
+        pending.map(function (p, j) {
           var url = URL.createObjectURL(p.blob);
-          return h("figure", null, h("img", { src: url, alt: "Photo waiting to upload", onload: function () { URL.revokeObjectURL(url); } }),
+          return h("figure", null, h("a", { class: "photo-link", href: "#", onclick: function (e) {
+            e.preventDefault();
+            openViewer(viewerItems(), (rec.photos || []).length + j, e.currentTarget);
+          } }, h("img", { src: url, alt: "Photo waiting to upload", onload: function () { URL.revokeObjectURL(url); } })),
             h("figcaption", { class: p.error ? "error" : "muted" }, p.error ? p.error.message : "Waiting to upload"),
             h("button", { type: "button", class: "link danger", onclick: async function () {
               await db.del("photos", p.key); await refreshPill(); route();

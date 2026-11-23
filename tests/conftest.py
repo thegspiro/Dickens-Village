@@ -44,7 +44,22 @@ class FakeRepository:
     def _with_counts(self, item: dict[str, Any]) -> dict[str, Any]:
         row = dict(item)
         row["extras_count"] = sum(e["quantity"] for e in self.extras.values() if e["item_id"] == item["id"])
+        photos = self.list_photos(item["id"])
+        row["cover_photo_id"] = photos[0]["id"] if photos else None
         return row
+
+    @staticmethod
+    def _ordered(rows: Any) -> list[dict[str, Any]]:
+        return sorted(rows, key=lambda p: (p.get("sort_order", 0), p["id"]))
+
+    @staticmethod
+    def _reorder(rows: list[dict[str, Any]], photo_ids: list[int]) -> bool:
+        if sorted(photo_ids) != sorted(p["id"] for p in rows):
+            return False
+        by_id = {p["id"]: p for p in rows}
+        for position, photo_id in enumerate(photo_ids):
+            by_id[photo_id]["sort_order"] = position
+        return True
 
     def list_items(self, filters: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
         rows = [self._with_counts(i) for i in self.items.values()]
@@ -114,8 +129,10 @@ class FakeRepository:
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         return {"items": [dict(i) for i in self.items.values()],
                 "extras": [dict(e) for e in self.extras.values()],
-                "photos": [{"id": p["id"], "item_id": p["item_id"], "client_uuid": p.get("client_uuid")}
-                           for p in self.photos.values()],
+                "photos": [{"id": p["id"], "item_id": p["item_id"], "client_uuid": p.get("client_uuid"),
+                            "caption": p.get("caption")}
+                           for p in sorted(self.photos.values(),
+                                           key=lambda p: (p["item_id"], p.get("sort_order", 0), p["id"]))],
                 "scans": [{"id": s["id"], "item_id": s["item_id"]} for s in self.scans.values()]}
 
     def snapshot_etag(self) -> str:
@@ -224,7 +241,17 @@ class FakeRepository:
         return len(self.links) < before
 
     def list_photos(self, item_id: int) -> list[dict[str, Any]]:
-        return [p for p in self.photos.values() if p["item_id"] == item_id]
+        return self._ordered(p for p in self.photos.values() if p["item_id"] == item_id)
+
+    def reorder_photos(self, item_id: int, photo_ids: list[int]) -> bool:
+        return item_id in self.items and self._reorder(self.list_photos(item_id), photo_ids)
+
+    def set_photo_caption(self, photo_id: int, caption: str | None) -> dict[str, Any] | None:
+        photo = self.photos.get(photo_id)
+        if photo is None:
+            return None
+        photo["caption"] = caption
+        return dict(photo)
 
     def get_photo(self, photo_id: int) -> dict[str, Any] | None:
         return self.photos.get(photo_id)
@@ -235,7 +262,8 @@ class FakeRepository:
             return None
         new_id = next(self._ids)
         self.photos[new_id] = {"id": new_id, "item_id": item_id, "filename": filename,
-                               "original_name": original_name, "client_uuid": client_uuid}
+                               "original_name": original_name, "client_uuid": client_uuid,
+                               "sort_order": len(self.list_photos(item_id)), "caption": None}
         return new_id
 
     def list_scans(self, item_id: int) -> list[dict[str, Any]]:
@@ -287,7 +315,7 @@ class FakeRepository:
         return [self._catalog_with_photos(h[3]) for h in sorted(hits, key=lambda h: h[:3])][:limit]
 
     def _catalog_with_photos(self, row: dict[str, Any]) -> dict[str, Any]:
-        ids = sorted(p["id"] for p in self.catalog_photos.values() if p["catalog_id"] == row["id"])
+        ids = [p["id"] for p in self.list_catalog_photos(row["id"])]
         return {**row, "photo_id": ids[0] if ids else None, "photo_count": len(ids)}
 
     def get_catalog_item(self, catalog_id: int) -> dict[str, Any] | None:
@@ -295,7 +323,17 @@ class FakeRepository:
         return self._catalog_with_photos(row) if row else None
 
     def list_catalog_photos(self, catalog_id: int) -> list[dict[str, Any]]:
-        return sorted((p for p in self.catalog_photos.values() if p["catalog_id"] == catalog_id), key=lambda p: p["id"])
+        return self._ordered(p for p in self.catalog_photos.values() if p["catalog_id"] == catalog_id)
+
+    def reorder_catalog_photos(self, catalog_id: int, photo_ids: list[int]) -> bool:
+        return catalog_id in self.catalog and self._reorder(self.list_catalog_photos(catalog_id), photo_ids)
+
+    def set_catalog_photo_caption(self, photo_id: int, caption: str | None) -> dict[str, Any] | None:
+        photo = self.catalog_photos.get(photo_id)
+        if photo is None:
+            return None
+        photo["caption"] = caption
+        return dict(photo)
 
     def get_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
         return self.catalog_photos.get(photo_id)
@@ -305,7 +343,8 @@ class FakeRepository:
             return None
         new_id = next(self._ids)
         self.catalog_photos[new_id] = {"id": new_id, "catalog_id": catalog_id, "filename": filename,
-                                       "original_name": original_name}
+                                       "original_name": original_name,
+                                       "sort_order": len(self.list_catalog_photos(catalog_id)), "caption": None}
         return new_id
 
     def delete_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:

@@ -84,7 +84,7 @@
   <tbody>
   {% for item in items %}
     <tr>
-      <td class="primary"><a href="{{ url_for('main.item_detail', item_id=item.id) }}">{{ item.name }}</a>{% if item.on_display %} <span class="badge">On display</span>{% endif %}</td>
+      <td class="primary">{% if item.cover_photo_id %}<img class="cover-thumb" src="{{ url_for('main.photo_thumb', photo_id=item.cover_photo_id) }}" alt="" loading="lazy">{% endif %}<a href="{{ url_for('main.item_detail', item_id=item.id) }}">{{ item.name }}</a>{% if item.on_display %} <span class="badge">On display</span>{% endif %}</td>
       <td data-label="Category">{{ CATEGORIES[item.category] }}</td>
       <td data-label="Item #">{{ item.item_number or '' }}</td>
       <td data-label="Condition">{{ condition_badge(item.condition_grade) }}</td>

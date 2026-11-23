@@ -1,0 +1,56 @@
+{#
+  A photo gallery. kind is "item" (your photos of a piece) or "catalog" (an
+  entry's reference photos). With manage, each photo gets a caption form,
+  move buttons and Remove; every one of these is a plain form, so it all works
+  without JavaScript. static/gallery.mjs adds the full-screen viewer and
+  drag-to-reorder on top.
+#}
+{% macro gallery(photos, kind, owner_id, alt, manage=True) -%}
+{% set full_ep = 'main.photo_file' if kind == 'item' else 'main.catalog_photo_file' %}
+{% set thumb_ep = 'main.photo_thumb' if kind == 'item' else 'main.catalog_photo_thumb' %}
+{% set delete_ep = 'main.photo_delete' if kind == 'item' else 'main.catalog_photo_delete' %}
+{% set caption_ep = 'main.photo_caption' if kind == 'item' else 'main.catalog_photo_caption' %}
+{% set order_url = url_for('main.photo_order', item_id=owner_id) if kind == 'item'
+   else url_for('main.catalog_photo_order', catalog_id=owner_id) %}
+<div class="photos" data-gallery{% if manage and photos|length > 1 %} data-order-url="{{ order_url }}"{% endif %}>
+  {% for p in photos %}
+  {% set moves = photo_moves(photos, loop.index0) %}
+  <figure class="photo" data-photo-id="{{ p.id }}">
+    <a class="photo-link" href="{{ url_for(full_ep, photo_id=p.id) }}" data-caption="{{ p.caption or '' }}">
+      <img src="{{ url_for(thumb_ep, photo_id=p.id) }}" alt="{{ p.caption or alt }}" loading="lazy">
+    </a>
+    {% if loop.first and photos|length > 1 %}<span class="badge cover-badge">Cover</span>{% endif %}
+    {% if p.caption %}<figcaption>{{ p.caption }}</figcaption>{% endif %}
+    {% if manage %}
+    <details class="photo-tools">
+      <summary>Edit</summary>
+      <form method="post" action="{{ url_for(caption_ep, photo_id=p.id) }}" class="caption-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="caption-{{ kind }}-{{ p.id }}">Caption</label>
+        <input id="caption-{{ kind }}-{{ p.id }}" name="caption" maxlength="300" value="{{ p.caption or '' }}"
+               placeholder="e.g. chip on the left eave">
+        <button type="submit" class="small">Save caption</button>
+      </form>
+      {% if moves %}
+      <div class="photo-moves">
+        {% for key, label in (('cover', 'Make cover'), ('earlier', '← Earlier'), ('later', 'Later →')) %}
+        {% if moves.get(key) %}
+        <form method="post" action="{{ order_url }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="order" value="{{ moves[key] }}">
+          <button type="submit" class="small secondary">{{ label }}</button>
+        </form>
+        {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      <form method="post" action="{{ url_for(delete_ep, photo_id=p.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link danger">Remove</button>
+      </form>
+    </details>
+    {% endif %}
+  </figure>
+  {% endfor %}
+</div>
+{%- endmacro %}

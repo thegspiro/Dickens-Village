@@ -42,7 +42,9 @@ from .validation import (
     format_inches,
     SORTS,
     STORAGE_COLUMNS,
+    parse_caption,
     parse_extra_form,
+    parse_id_list,
     parse_item_form,
     parse_list_filters,
     parse_positive_int,
@@ -601,6 +603,66 @@ def photo_add(item_id: int) -> Any:
     return redirect(url_for("main.item_detail", item_id=item_id) + "#photos")
 
 
+@bp.app_template_global()
+def photo_moves(photos: list[dict[str, Any]], index: int) -> dict[str, str]:
+    """The new order (comma-separated ids) for each move button on photo `index`."""
+    ids = [int(p["id"]) for p in photos]
+    moves: dict[str, str] = {}
+    if index > 0:
+        earlier = ids[:]
+        earlier[index - 1], earlier[index] = earlier[index], earlier[index - 1]
+        moves["earlier"] = ",".join(map(str, earlier))
+        moves["cover"] = ",".join(map(str, [ids[index], *ids[:index], *ids[index + 1:]]))
+    if index < len(ids) - 1:
+        later = ids[:]
+        later[index + 1], later[index] = later[index], later[index + 1]
+        moves["later"] = ",".join(map(str, later))
+    return moves
+
+
+def _wants_json() -> bool:
+    """The gallery script posts with fetch and asks for JSON instead of a redirect."""
+    return request.accept_mimetypes.best == "application/json"
+
+
+def _reordered(ok: bool, back: str) -> Any:
+    if _wants_json():
+        return (jsonify({"ok": True}), 200) if ok else (jsonify({"error": _REORDER_FAILED}), 409)
+    flash("Photo order saved." if ok else _REORDER_FAILED, "success" if ok else "error")
+    return redirect(back)
+
+
+_REORDER_FAILED = "The photos changed while you were arranging them. Reload the page and try again."
+
+
+def _captioned(row: dict[str, Any] | None, error: str | None, back: Callable[[dict[str, Any]], str]) -> Any:
+    if row is None:
+        abort(404)
+    if _wants_json():
+        return (jsonify({"error": error}), 400) if error else (jsonify({"caption": row.get("caption")}), 200)
+    flash(error or "Caption saved.", "error" if error else "success")
+    return redirect(back(row))
+
+
+@bp.post("/items/<int:item_id>/photos/order")
+@login_required
+def photo_order(item_id: int) -> Any:
+    check_csrf()
+    _item_or_404(item_id)
+    ids = parse_id_list(request.form.get("order"))
+    ok = ids is not None and repo().reorder_photos(item_id, ids)
+    return _reordered(ok, url_for("main.item_detail", item_id=item_id) + "#photos")
+
+
+@bp.post("/photos/<int:photo_id>/caption")
+@login_required
+def photo_caption(photo_id: int) -> Any:
+    check_csrf()
+    caption, error = parse_caption(request.form.get("caption"))
+    row = repo().get_photo(photo_id) if error else repo().set_photo_caption(photo_id, caption)
+    return _captioned(row, error, lambda r: url_for("main.item_detail", item_id=r["item_id"]) + "#photos")
+
+
 @bp.get("/photos/<int:photo_id>")
 @login_required
 def photo_file(photo_id: int) -> Any:
@@ -759,6 +821,26 @@ def catalog_photo_add(catalog_id: int) -> Any:
     if not _store_uploads(lambda filename, original: repo().add_catalog_photo(catalog_id, filename, original)):
         abort(404)
     return redirect(url_for("main.catalog_entry", catalog_id=catalog_id) + "#photos")
+
+
+@bp.post("/catalog/<int:catalog_id>/photos/order")
+@login_required
+def catalog_photo_order(catalog_id: int) -> Any:
+    check_csrf()
+    if repo().get_catalog_item(catalog_id) is None:
+        abort(404)
+    ids = parse_id_list(request.form.get("order"))
+    ok = ids is not None and repo().reorder_catalog_photos(catalog_id, ids)
+    return _reordered(ok, url_for("main.catalog_entry", catalog_id=catalog_id) + "#photos")
+
+
+@bp.post("/catalog-photos/<int:photo_id>/caption")
+@login_required
+def catalog_photo_caption(photo_id: int) -> Any:
+    check_csrf()
+    caption, error = parse_caption(request.form.get("caption"))
+    row = repo().get_catalog_photo(photo_id) if error else repo().set_catalog_photo_caption(photo_id, caption)
+    return _captioned(row, error, lambda r: url_for("main.catalog_entry", catalog_id=r["catalog_id"]) + "#photos")
 
 
 @bp.get("/catalog-photos/<int:photo_id>")

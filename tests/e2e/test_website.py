@@ -204,7 +204,7 @@ def test_photos_upload_several_view_delete_and_reject_bad_files(desk, tag, image
     expect(thumbs).to_have_count(2)
     # thumbnails really load (are images, served with a login)
     widths = page.eval_on_selector_all("#photos .photos img", "els => els.map(e => e.naturalWidth)")
-    assert all(0 < w <= 320 for w in widths)
+    assert all(0 < w <= 480 for w in widths)
     full = page.request.get(thumbs.first.evaluate("e => e.parentElement.href"))
     assert full.ok and full.headers["content-type"] == "image/jpeg"
 
@@ -215,6 +215,7 @@ def test_photos_upload_several_view_delete_and_reject_bad_files(desk, tag, image
     expect(flashes.filter(has_text=f"too-big.jpg: That photo is larger than {MAX_UPLOAD_MB} MB.")).to_have_count(1)
     expect(page.locator("#photos .photos img")).to_have_count(2)
 
+    page.locator("#photos .photo-tools summary").first.click()
     page.locator('#photos button:has-text("Remove")').first.click()
     expect(page.locator("#photos .photos img")).to_have_count(1)
     # photos need a login

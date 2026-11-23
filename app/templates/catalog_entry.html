@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_gallery.html" import gallery %}
 {% block title %}{{ entry.name }} · Catalog{% endblock %}
 {% block content %}
 <div class="title-row">
@@ -41,17 +42,8 @@
   <h2>Reference photos <span class="muted">({{ photos|length }})</span></h2>
   <p class="muted">Photos here show in the catalog lookup and on every piece linked to this entry. They are stored only on your server.</p>
   {% if photos %}
-  <div class="photos">
-    {% for p in photos %}
-    <figure>
-      <a href="{{ url_for('main.catalog_photo_file', photo_id=p.id) }}"><img src="{{ url_for('main.catalog_photo_thumb', photo_id=p.id) }}" alt="Photo of {{ entry.name }}" loading="lazy"></a>
-      <form method="post" action="{{ url_for('main.catalog_photo_delete', photo_id=p.id) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="link danger">Remove</button>
-      </form>
-    </figure>
-    {% endfor %}
-  </div>
+  <p class="hint">Tap a photo to see it full size.{% if photos|length > 1 %} The first one is the cover, shown in the lookup; drag photos (or use Edit) to change the order.{% endif %}</p>
+  {{ gallery(photos, 'catalog', entry.id, 'Photo of ' ~ entry.name) }}
   {% endif %}
   <form method="post" action="{{ url_for('main.catalog_photo_add', catalog_id=entry.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

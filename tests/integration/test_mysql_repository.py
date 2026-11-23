@@ -99,6 +99,12 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0007_photo_order_captions"
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM item_photos LIKE 'sort_order'")
+            assert cur.fetchone() is None
+            cur.execute("SHOW COLUMNS FROM catalog_photos LIKE 'caption'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0006_item_scans"
         assert migrate.migrate_down(conn, migrations) == "0005_sync"
         with conn.cursor() as cur:
@@ -124,7 +130,7 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
             assert cur.fetchone() is None
         assert migrate.migrate_up(conn, migrations) == [
             "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
-            "0006_item_scans"]
+            "0006_item_scans", "0007_photo_order_captions"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -497,3 +503,92 @@ def test_scans_add_list_delete_and_cascade(repo):
     # deleting the piece returns its scan files too, so they can be removed from disk
     assert repo.delete_item(item_id) == ["c" * 32 + ".gltf"]
     assert repo.list_scans(item_id) == []
+
+
+def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_config, migrated):
+    """0007 numbers existing photos by upload order; re-running it leaves an order chosen since."""
+    by_version = {m.version: m for m in migrate.discover(MIGRATIONS)}
+    target = by_version["0007_photo_order_captions"]
+    conn = connect(db_config)
+    try:
+        assert migrate.migrate_down(conn, list(by_version.values())) == "0007_photo_order_captions"
+        repo = MySQLRepository(conn)
+        a = repo.create_item(item(name="Backfill A"))
+        b = repo.create_item(item(name="Backfill B"))
+        with conn.cursor() as cur:
+            for item_id, name in ((a, "a1"), (a, "a2"), (a, "a3"), (b, "b1"), (b, "b2")):
+                cur.execute("INSERT INTO item_photos (item_id, filename) VALUES (%s, %s)",
+                            (item_id, f"{name:0<32}.jpg"))
+        conn.commit()
+        assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions"]
+
+        def order(item_id):
+            with conn.cursor() as cur:
+                cur.execute("SELECT filename, sort_order FROM item_photos WHERE item_id = %s ORDER BY id", (item_id,))
+                return [(r["filename"][:2], r["sort_order"]) for r in cur.fetchall()]
+
+        assert order(a) == [("a1", 0), ("a2", 1), ("a3", 2)]
+        assert order(b) == [("b1", 0), ("b2", 1)]
+        with conn.cursor() as cur:  # the person moves a3 to the front
+            cur.execute("UPDATE item_photos SET sort_order = CASE LEFT(filename, 2) "
+                        "WHEN 'a3' THEN 0 WHEN 'a1' THEN 1 ELSE 2 END WHERE item_id = %s", (a,))
+        conn.commit()
+        migrate._execute_all(conn, migrate.split_statements(target.up_path.read_text()))
+        conn.commit()
+        assert order(a) == [("a1", 1), ("a2", 2), ("a3", 0)]
+    finally:
+        conn.close()
+
+
+def test_photo_order_captions_cover_and_etags(db_config, repo):
+    item_id = repo.create_item(item(name="Gallery piece"))
+    a = repo.add_photo(item_id, "1" * 32 + ".jpg", "a.jpg")
+    b = repo.add_photo(item_id, "2" * 32 + ".jpg", "b.jpg")
+    c = repo.add_photo(item_id, "3" * 32 + ".jpg", "c.jpg")
+    assert [(p["id"], p["sort_order"]) for p in repo.list_photos(item_id)] == [(a, 0), (b, 1), (c, 2)]
+    listed = {r["id"]: r for r in repo.list_items(filters(q="Gallery piece"))[0]}
+    assert listed[item_id]["cover_photo_id"] == a
+
+    etag = repo.snapshot_etag()
+    assert repo.reorder_photos(item_id, [c, a, b])
+    assert [p["id"] for p in repo.list_photos(item_id)] == [c, a, b]
+    assert repo.list_items(filters(q="Gallery piece"))[0][0]["cover_photo_id"] == c
+    moved = repo.snapshot_etag()
+    assert moved != etag
+    assert repo.reorder_photos(item_id, [a, c, b]) and repo.snapshot_etag() != moved  # a swap changes it too
+
+    for bad in ([a, b], [a, b, c, c], [a, b, c, 999_999], []):
+        assert repo.reorder_photos(item_id, bad) is False
+    assert [p["id"] for p in repo.list_photos(item_id)] == [a, c, b]
+    assert repo.reorder_photos(999_999, [a]) is False
+
+    before = repo.snapshot_etag()
+    assert repo.set_photo_caption(b, "Chip on the eave")["caption"] == "Chip on the eave"
+    assert repo.get_photo(b)["caption"] == "Chip on the eave"
+    assert repo.snapshot_etag() != before
+    snap = [p for p in repo.snapshot()["photos"] if p["item_id"] == item_id]
+    assert [(p["id"], p["caption"]) for p in snap] == [(a, None), (c, None), (b, "Chip on the eave")]
+    assert repo.set_photo_caption(b, None)["caption"] is None
+    assert repo.set_photo_caption(999_999, "x") is None
+
+    d = repo.add_photo(item_id, "4" * 32 + ".jpg", "d.jpg")  # new photos go last
+    assert [p["id"] for p in repo.list_photos(item_id)][-1] == d
+
+
+def test_catalog_photo_order_moves_the_lookup_thumbnail(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    entry = repo.search_catalog("56.65161")[0]
+    a = repo.add_catalog_photo(entry["id"], "5" * 32 + ".jpg", None)
+    b = repo.add_catalog_photo(entry["id"], "6" * 32 + ".jpg", None)
+    assert repo.search_catalog("56.65161")[0]["photo_id"] == a
+    etag = repo.catalog_etag()
+    assert repo.reorder_catalog_photos(entry["id"], [b, a])
+    assert repo.search_catalog("56.65161")[0]["photo_id"] == b
+    assert repo.catalog_etag() != etag
+    assert repo.reorder_catalog_photos(entry["id"], [b]) is False
+    assert repo.set_catalog_photo_caption(a, "Box art")["caption"] == "Box art"
+    assert [p["caption"] for p in repo.list_catalog_photos(entry["id"])] == [None, "Box art"]

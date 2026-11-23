@@ -35,6 +35,7 @@ var PRECACHE = [
   "/static/style.css",
   "/static/app.js",
   "/static/catalog-lookup.js",
+  "/static/gallery.mjs",
   "/static/icons/icon-192.png",
   "/static/icons/favicon-32.png",
 ];

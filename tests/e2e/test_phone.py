@@ -404,6 +404,7 @@ def test_thumbnail_of_a_photo_deleted_elsewhere_is_forgotten(phone, make_context
         raise AssertionError(f"cached thumbnails: {cached()}")
 
     wait_until(lambda: thumb in cached())
+    desk.locator(f'#photos .photo[data-photo-id="{photo_id}"] summary').click()
     desk.locator(f'#photos form[action="/photos/{photo_id}/delete"] button').click()
     expect(desk.locator(".flash-success")).to_contain_text("Photo removed.")
     page.click("#sync-pill button")
