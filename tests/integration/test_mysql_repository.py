@@ -592,3 +592,17 @@ def test_catalog_photo_order_moves_the_lookup_thumbnail(db_config, repo):
     assert repo.reorder_catalog_photos(entry["id"], [b]) is False
     assert repo.set_catalog_photo_caption(a, "Box art")["caption"] == "Box art"
     assert [p["caption"] for p in repo.list_catalog_photos(entry["id"])] == [None, "Box art"]
+
+
+def test_upload_filenames_lists_photos_catalog_photos_and_scans(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    item_id = repo.create_item(item(name="Files"))
+    repo.add_photo(item_id, "7" * 32 + ".jpg", None)
+    repo.add_scan(item_id, "8" * 32 + ".glb", None, 10)
+    repo.add_catalog_photo(repo.search_catalog("56.65161")[0]["id"], "9" * 32 + ".jpg", None)
+    names = repo.upload_filenames()
+    assert {"7" * 32 + ".jpg", "8" * 32 + ".glb", "9" * 32 + ".jpg"} <= names
