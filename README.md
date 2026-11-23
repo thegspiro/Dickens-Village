@@ -93,6 +93,14 @@ docker compose exec db sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MY
 ```
 Also back up the uploads volume or folder.
 
+## Tidying the upload folder
+
+If the server stops in the middle of saving or deleting a photo or scan, a file can be left in the upload folder that nothing refers to. To list such files, and any files the database expects but can't find:
+```sh
+docker compose run --rm app python -m app.uploads status
+```
+To delete the orphaned files it lists, run `python -m app.uploads clean --yes` the same way. Only files named the way the app names them are considered, files changed in the last hour are skipped (an upload may be in progress), and nothing else in the folder is touched.
+
 ## Migrations
 
 ```sh

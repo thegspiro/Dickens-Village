@@ -682,6 +682,17 @@ class MySQLRepository:
         self._end_read()
         return rows
 
+    # -- upload housekeeping ------------------------------------------------------
+
+    def upload_filenames(self) -> set[str]:
+        """Every photo and scan filename the database refers to."""
+        rows = self._all(
+            "SELECT filename FROM item_photos UNION ALL SELECT filename FROM catalog_photos "
+            "UNION ALL SELECT filename FROM item_scans"
+        )
+        self._end_read()
+        return {row["filename"] for row in rows}
+
     # -- summaries ------------------------------------------------------------
 
     def storage_summary(self) -> list[dict[str, Any]]:
