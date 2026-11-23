@@ -306,3 +306,12 @@ test("fitWithin shrinks the long side to the limit and keeps the shape", () => {
   assert.equal(m.fitWithin(640, 480, 2000), null);
   assert.equal(m.fitWithin(0, 480, 2000), null);
 });
+
+test("the phone's catalog search skips entries removed from the reference lists", () => {
+  const entries = [
+    { id: 1, item_number: "56.65005", name: "Fezziwig's Warehouse", listed: true },
+    { id: 2, item_number: "56.65006", name: "Fezziwig's Old Shop", listed: false },
+    { id: 3, item_number: "56.65007", name: "Fezziwig's Stable" }, // older copy without the flag
+  ];
+  assert.deepEqual(m.searchCatalog(entries, "Fezziwig").map((e) => e.id), [1, 3]);
+});

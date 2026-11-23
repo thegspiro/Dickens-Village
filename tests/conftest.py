@@ -293,7 +293,7 @@ class FakeRepository:
         new_id = next(self._ids)
         row = {
             "id": new_id, "list_name": "lighted", "item_number": None, "name": "", "details": None,
-            "series": None, "year_issued": None, "year_retired": None, "is_current": 0,
+            "series": None, "year_issued": None, "year_retired": None, "is_current": 0, "listed": 1,
             "srp_usd": None, "srp_cad": None, "default_category": None,
             "parent_name": None, "parent_item_number": None,
         }
@@ -308,6 +308,8 @@ class FakeRepository:
         digits = "".join(ch for ch in q if ch.isdigit())
         hits = []
         for row in self.catalog.values():
+            if not row.get("listed", 1):
+                continue
             number = (row["item_number"] or "").lower()
             if q in number or q in row["name"].lower() or (len(digits) >= 2 and digits in number.replace(".", "")):
                 rank = 0 if number == q else 1 if number.startswith(q) else 2 if q in number else 3
