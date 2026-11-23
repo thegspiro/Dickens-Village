@@ -120,7 +120,7 @@ jobs:
           export UPLOAD_DIR="$RUNNER_TEMP/uploads"
           python -m app.migrate up
           python -m app.catalog sync
-          nohup gunicorn --bind 127.0.0.1:8000 --workers 2 --timeout 120 \
+          nohup gunicorn --bind 127.0.0.1:8000 --workers 2 --worker-class gthread --threads 4 --timeout 120 \
             --access-logfile "$RUNNER_TEMP/access.log" --error-logfile "$RUNNER_TEMP/app.log" app.wsgi:app &
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/healthz >/dev/null; then echo "App is up"; exit 0; fi
