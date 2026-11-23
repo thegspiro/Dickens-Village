@@ -26,58 +26,32 @@
     });
   });
 
-  // Logging out erases the phone's offline copy (after a warning if changes haven't synced).
+  // Logging out ends the session on the server, then erases the phone's offline
+  // copy (after a warning if changes haven't synced). Without JavaScript, or if
+  // the module can't load, the form simply submits.
   var logoutForm = document.getElementById("logout-form");
-  if (logoutForm && window.indexedDB) {
+  if (logoutForm && window.indexedDB && window.fetch) {
     logoutForm.addEventListener("submit", function (event) {
-      if (logoutForm.dataset.wiped) return;
+      if (logoutForm.dataset.plain) return;
       event.preventDefault();
-      pendingCount().then(function (count) {
-        if (count > 0 && !window.confirm(count + (count === 1 ? " change on this phone hasn't" : " changes on this phone haven't") +
-            " synced yet. Logging out deletes them. Log out anyway?")) return;
-        return wipeOfflineData().then(function () {
-          logoutForm.dataset.wiped = "1";
-          logoutForm.submit();
+      var button = logoutForm.querySelector("button");
+      import("/static/offline/logout.mjs").then(function (account) {
+        return account.pendingCount().then(function (count) {
+          var warning = account.lossWarning(count, "Logging out", "Log out anyway?");
+          if (warning && !window.confirm(warning)) return;
+          if (button) button.disabled = true;
+          return account.logout(logoutForm.elements.csrf_token.value).then(function () {
+            window.location.href = "/login";
+          }, function (err) {
+            if (button) button.disabled = false;
+            window.alert(err && err.message ? err.message : "Couldn't log out. Try again.");
+          });
         });
+      }, function () {
+        logoutForm.dataset.plain = "1";
+        logoutForm.submit();
       });
     });
-  }
-
-  function pendingCount() {
-    return new Promise(function (resolve) {
-      var req = indexedDB.open("dickens-offline");
-      req.onupgradeneeded = function () { req.transaction.abort(); resolve(0); }; // nothing stored yet
-      req.onerror = function () { resolve(0); };
-      req.onsuccess = function () {
-        var db = req.result;
-        try {
-          var get = db.transaction("meta").objectStore("meta").get("pendingCount");
-          get.onsuccess = function () { db.close(); resolve(get.result ? get.result.v : 0); };
-          get.onerror = function () { db.close(); resolve(0); };
-        } catch (e) { db.close(); resolve(0); }
-      };
-    });
-  }
-
-  function wipeOfflineData() {
-    try {
-      localStorage.removeItem("dickens-offline-enabled");
-      localStorage.removeItem("dickens-last-bg-sync");
-    } catch (e) { /* blocked */ }
-    var jobs = [new Promise(function (resolve) {
-      var req = indexedDB.deleteDatabase("dickens-offline");
-      req.onsuccess = req.onerror = req.onblocked = function () { resolve(); };
-    })];
-    if (window.caches) {
-      jobs.push(caches.keys().then(function (keys) {
-        return Promise.all(keys.filter(function (k) { return k.indexOf("dickens-data-") === 0; })
-          .map(function (k) { return caches.delete(k); }));
-      }));
-    }
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage("clear-data");
-    }
-    return Promise.all(jobs).catch(function () {});
   }
 
   // Keep the offline copy fresh while browsing the website (at most every 2 minutes),

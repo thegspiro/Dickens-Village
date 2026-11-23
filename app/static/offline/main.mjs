@@ -9,6 +9,8 @@
 import * as db from "./db.mjs";
 import * as m from "./model.mjs";
 import { events, sync, countPending, isRunning } from "./sync.mjs";
+import * as account from "./logout.mjs";
+import { refreshToken } from "./api.mjs";
 
 var root = document.getElementById("app");
 var pill = document.getElementById("sync-pill");
@@ -127,11 +129,14 @@ function renderPill(status) {
   if (s.state === "syncing") { text = "Syncing…"; cls += " busy"; }
   else if (!navigator.onLine || s.state === "offline") { text = "Offline" + waiting; cls += " offline"; }
   else if (s.state === "login") { text = "Log in to sync" + waiting; cls += " warn"; }
+  else if (s.state === "erased") { text = "Copy erased — tap to download again"; cls += " warn"; }
   else if (s.state === "error") { text = "Sync problem — tap to retry" + waiting; cls += " warn"; }
   else { text = s.pending || s.attention ? "Sync now" + waiting : "All synced"; }
   while (pill.firstChild) pill.removeChild(pill.firstChild);
   if (s.state === "login") {
     pill.appendChild(h("a", { class: cls, href: "/login?next=/app" }, text));
+  } else if (s.state === "erased") {
+    pill.appendChild(h("button", { type: "button", class: cls, onclick: downloadAgain }, text));
   } else {
     pill.appendChild(h("button", { type: "button", class: cls, onclick: function () { runSync(); } }, text));
   }
@@ -211,7 +216,55 @@ async function listView(params) {
         h("span", { class: "block" }, badge(v.condition_grade), " ", storageText(v))));
     })),
     lastSync ? h("p", { class: "muted" }, "Last synced " + new Date(lastSync).toLocaleString()) : null,
+    thisPhoneCard(),
   ];
+}
+
+/* ---- this phone: log out, erase ------------------------------------------- */
+
+/* Turn offline use back on and start over (asks to log in first if needed). */
+function downloadAgain() {
+  db.enableOffline();
+  location.hash = "#/";
+  location.reload();
+}
+
+function thisPhoneCard() {
+  var message = h("p", { class: "flash flash-error", role: "alert", hidden: true });
+  function fail(text) { message.textContent = text; message.hidden = false; }
+
+  async function confirmLoss(action, question) {
+    var warning = account.lossWarning(await account.pendingCount(), action, question);
+    return !warning || window.confirm(warning);
+  }
+
+  var logOut = h("button", { type: "button", onclick: async function () {
+    if (!(await confirmLoss("Logging out", "Log out anyway?"))) return;
+    logOut.disabled = true;
+    try {
+      var session = await refreshToken();
+      await account.logout(session.data.csrf_token);
+      location.href = "/login";
+    } catch (err) {
+      logOut.disabled = false;
+      fail(err instanceof account.LogoutError ? err.message
+        : "Couldn't reach the server to log out. Nothing was erased. Try again when you're online.");
+    }
+  } }, "Log out");
+
+  var eraseButton = h("button", { type: "button", class: "danger", onclick: async function () {
+    if (!(await confirmLoss("Erasing", "Erase anyway?"))) return;
+    if (!window.confirm("Erase this phone's copy of your collection? You stay logged in; " +
+        "opening the phone app again downloads a fresh copy.")) return;
+    await account.erase();
+    renderPill({ state: "erased" });
+    route();
+  } }, "Erase this phone's copy");
+
+  return h("section", { class: "card this-phone" }, h("h2", null, "This phone"),
+    h("p", { class: "muted" }, "Your collection is kept on this phone so it works offline. " +
+      "Logging out erases that copy; erasing it keeps you logged in."),
+    message, logOut, " ", eraseButton);
 }
 
 /* ---- piece -------------------------------------------------------------- */
@@ -675,9 +728,16 @@ async function route(options) {
     else if (parts[0] === "attention") view = await attentionView();
     else view = notFound();
   } catch (err) {
-    if (window.console) console.error(err);
-    view = h("section", { class: "card" }, h("h1", null, "Something went wrong"),
-      h("p", null, "This phone's storage couldn't be read. Your saved changes are still there; try reloading."));
+    if (err instanceof db.StorageErased) {
+      view = h("section", { class: "card" }, h("h1", null, "Copy erased"),
+        h("p", null, "This phone's copy of your collection was erased (you logged out, or chose to erase it)."),
+        h("p", null, h("button", { type: "button", onclick: downloadAgain }, "Download a fresh copy"), " ",
+          h("a", { href: "/items" }, "Go to the full site")));
+    } else {
+      if (window.console) console.error(err);
+      view = h("section", { class: "card" }, h("h1", null, "Something went wrong"),
+        h("p", null, "This phone's storage couldn't be read. Your saved changes are still there; try reloading."));
+    }
   }
   // The address changed while this screen was read from storage: the newer
   // route() call draws that one, so don't cover it with this older screen.
@@ -686,7 +746,7 @@ async function route(options) {
 }
 
 async function start() {
-  try { localStorage.setItem("dickens-offline-enabled", "1"); } catch (e) { /* private mode */ }
+  db.enableOffline();
   var session = await db.getMeta("session", null);
   if (session && session.choices) choices = session.choices;
   // Until the first sync of this visit finishes, don't claim everything is synced.

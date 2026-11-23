@@ -31,6 +31,7 @@ var PRECACHE = [
   "/static/offline/sync.mjs",
   "/static/offline/db.mjs",
   "/static/offline/api.mjs",
+  "/static/offline/logout.mjs",
   "/static/style.css",
   "/static/app.js",
   "/static/catalog-lookup.js",

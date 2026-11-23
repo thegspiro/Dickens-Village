@@ -232,6 +232,17 @@ def test_other_browsers_do_not_keep_a_copy(desk):
     assert page.evaluate("indexedDB.databases().then(d => d.map(x => x.name))") == []
 
 
+def wait_for_server(page, item_id, field, value, timeout_s=30):
+    """Poll the API until the piece has `value` in `field`. The sync pill can
+    still say "All synced" for a moment after a save, before its sync starts."""
+    for _ in range(timeout_s * 5):
+        items = {i["id"]: i for i in api_snapshot(page)["items"]}
+        if items.get(item_id, {}).get(field) == value:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(f"piece {item_id} never had {field}={value!r}: {items.get(item_id)}")
+
+
 def lose_replies(page, pattern, method):
     """Let matching requests reach the server but drop the reply, like flaky Wi-Fi."""
     def handler(route):
@@ -284,10 +295,9 @@ def test_editing_the_same_field_after_a_lost_patch_reply_is_not_a_conflict(phone
     page.goto(f"/app#/edit/s-{item_id}")
     page.fill("#f-storage_tub", "3")
     page.click('button:has-text("Save changes")')
-    page.click("#sync-pill button")
+    wait_for_server(page, item_id, "storage_tub", "3")
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     expect(page.locator("#sync-pill")).not_to_contain_text("attention")
-    assert {i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["storage_tub"] == "3"
     assert [e for e in errors if e.startswith("pageerror")] == []  # dropped replies log network errors
 
 
@@ -400,3 +410,109 @@ def test_thumbnail_of_a_photo_deleted_elsewhere_is_forgotten(phone, make_context
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     wait_until(lambda: thumb not in cached())
     assert errors == []
+
+
+DATABASES = "indexedDB.databases().then(d => d.map(x => x.name))"
+
+
+def test_logout_in_one_tab_stops_another_tab_restoring_the_copy(phone, tag):
+    ctx, app_tab, errors = phone
+    add_piece(app_tab, f"Lingering {tag}")
+    open_app_and_sync(app_tab)
+    site_tab = ctx.new_page()
+    site_tab.goto("/items")
+    site_tab.click("#nav-toggle")
+    site_tab.click('button:has-text("Log out")')
+    expect(site_tab).to_have_url(re.compile(r"/login"))
+    assert site_tab.evaluate(DATABASES) == []
+    # the phone app tab, still open, syncs on its timer
+    app_tab.click("#sync-pill button")
+    expect(app_tab.locator("#sync-pill")).to_contain_text(re.compile("Log in to sync|Copy erased"), timeout=30_000)
+    assert app_tab.evaluate(DATABASES) == []  # that sync didn't recreate the phone's copy
+    app_tab.goto("/app#/")
+    app_tab.reload()
+    expect(app_tab.locator("#sync-pill")).to_contain_text("Log in to sync", timeout=30_000)
+    expect(app_tab.locator(".offline-card", has_text=f"Lingering {tag}")).to_have_count(0)
+
+
+def test_phone_app_can_log_out(phone, tag):
+    ctx, page, errors = phone
+    add_piece(page, f"Logged {tag}")
+    open_app_and_sync(page)
+    page.click('.this-phone button:has-text("Log out")')
+    expect(page).to_have_url(re.compile(r"/login"))
+    assert page.evaluate(DATABASES) == []
+    assert page.request.get("/api/v1/session").status == 401  # the server session ended too
+    assert errors == []
+
+
+def test_phone_app_can_erase_its_copy_and_stay_logged_in(phone, tag):
+    ctx, page, errors = phone
+    add_piece(page, f"Erasable {tag}")
+    open_app_and_sync(page)
+    page.on("dialog", lambda d: d.accept())
+    page.click('.this-phone button:has-text("Erase")')
+    expect(page.locator("h1")).to_contain_text("Copy erased")
+    assert page.evaluate(DATABASES) == []
+    assert page.request.get("/api/v1/session").status == 200
+    page.click('button:has-text("Download a fresh copy")')
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    expect(page.locator(".offline-card", has_text=f"Erasable {tag}")).to_be_visible()
+    assert errors == []
+
+
+def test_logging_out_offline_erases_nothing(phone, tag):
+    ctx, page, errors = phone
+    open_app_and_sync(page)
+    page.goto("/items")
+    page.evaluate("navigator.serviceWorker.ready.then(() => true)")
+    messages = []
+    page.on("dialog", lambda d: (messages.append(d.message), d.accept()))
+    ctx.route("**/logout", lambda route: route.abort())  # the server can't be reached
+    page.click("#nav-toggle")
+    page.click('button:has-text("Log out")')
+    page.wait_for_timeout(500)
+    ctx.unroute("**/logout")
+    assert messages and "can't log out right now" in messages[0]
+    assert "dickens-offline" in page.evaluate(DATABASES)
+    assert page.request.get("/api/v1/session").status == 200
+
+
+def test_an_outdated_security_token_is_refreshed_not_treated_as_logged_out(phone, tag):
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Token {tag}", storage_tub="1")
+    open_app_and_sync(page)
+    refused = []
+
+    def stale_once(route):
+        if route.request.method == "PATCH" and not refused:
+            refused.append(True)
+            route.fulfill(status=403, content_type="application/json",
+                          body='{"error": "Security token missing or expired. Reload the app."}')
+        else:
+            route.continue_()
+
+    page.route(f"**/api/v1/items/{item_id}", stale_once)
+    page.goto(f"/app#/edit/s-{item_id}")
+    page.fill("#f-storage_tub", "6")
+    page.click('button:has-text("Save changes")')
+    wait_for_server(page, item_id, "storage_tub", "6")
+    assert refused
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    expect(page.locator("#sync-pill")).not_to_contain_text("Log in")
+
+
+def test_a_proxy_refusal_is_reported_on_the_change_not_as_a_login_problem(phone, tag):
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Proxy {tag}", storage_tub="1")
+    open_app_and_sync(page)
+    page.route(f"**/api/v1/items/{item_id}", lambda route: route.fulfill(
+        status=403, content_type="text/html", body="<h1>Forbidden by firewall</h1>")
+        if route.request.method == "PATCH" else route.continue_())
+    page.goto(f"/app#/edit/s-{item_id}")
+    page.fill("#f-storage_tub", "6")
+    page.click('button:has-text("Save changes")')
+    expect(page.locator("#sync-pill")).to_contain_text("1 need attention", timeout=30_000)
+    expect(page.locator("#sync-pill")).not_to_contain_text("Log in")
+    page.goto("/app#/attention")
+    expect(page.locator(".card", has_text=f"Proxy {tag}")).to_contain_text("HTTP 403")
