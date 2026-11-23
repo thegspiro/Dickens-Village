@@ -258,3 +258,42 @@ test("after a lost create, a field changed on both sides goes to the server as a
   // based on what the phone sent, so the server sees tub changed there too and reports it
   assert.deepEqual(m.patchPayload(out), { base: { storage_tub: "1" }, changes: { storage_tub: "4" } });
 });
+
+// db.upgrade only needs objectStoreNames/createObjectStore/indexNames/createIndex, so a small fake is enough.
+import { upgrade } from "../../app/static/offline/db.mjs";
+
+function fakeDb(existing) {
+  const stores = {};
+  const makeStore = (indexes) => {
+    const names = new Set(indexes);
+    return { indexNames: { contains: (n) => names.has(n) }, createIndex: (n) => { names.add(n); }, names };
+  };
+  Object.entries(existing).forEach(([name, indexes]) => { stores[name] = makeStore(indexes); });
+  const created = [];
+  const db = {
+    objectStoreNames: { contains: (n) => n in stores },
+    createObjectStore: (n) => {
+      if (n in stores) throw new Error("ConstraintError: store " + n + " exists");
+      created.push(n);
+      stores[n] = makeStore([]);
+      return stores[n];
+    },
+  };
+  const tx = { objectStore: (n) => stores[n] };
+  return { db, tx, stores, created };
+}
+
+test("a fresh database gets every store and index", () => {
+  const { db, tx, stores, created } = fakeDb({});
+  upgrade(db, tx);
+  assert.deepEqual(created, ["items", "extras", "photos", "catalog", "meta"]);
+  assert.equal(stores.extras.names.has("itemKey"), true);
+  assert.equal(stores.photos.names.has("itemKey"), true);
+});
+
+test("upgrading a database that has the stores already adds only what's missing", () => {
+  const { db, tx, stores, created } = fakeDb({ items: [], extras: ["itemKey"], photos: [], catalog: [] });
+  upgrade(db, tx); // would throw "store exists" if it created stores unconditionally
+  assert.deepEqual(created, ["meta"]);
+  assert.equal(stores.photos.names.has("itemKey"), true);
+});

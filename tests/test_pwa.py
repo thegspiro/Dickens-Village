@@ -89,3 +89,35 @@ def test_camera_and_library_files_upload_together(logged_in, fake_repo):
         "photo": [(png_bytes(), "camera.jpg"), (png_bytes(), "library.png")], "csrf_token": csrf(logged_in)},
         content_type="multipart/form-data", follow_redirects=True)
     assert "Added 2 photos." in resp.get_data(as_text=True)
+
+
+def test_service_worker_carries_this_deploys_build_id(client, app):
+    body = client.get("/sw.js").get_data(as_text=True)
+    build = app.config["STATIC_BUILD"]
+    assert len(build) == 16 and f'var CACHE_VERSION = "{build}";' in body
+    assert "__BUILD__" not in body
+    assert client.get("/sw.js").get_data(as_text=True) == body  # stable between requests
+
+
+def test_build_id_follows_app_files_but_not_the_3d_viewer(tmp_path):
+    from app import static_build_id
+
+    static, templates = tmp_path / "static", tmp_path / "templates"
+    (static / "offline").mkdir(parents=True)
+    (static / "vendor").mkdir()
+    templates.mkdir()
+    (static / "style.css").write_text("a{}")
+    (static / "offline" / "main.mjs").write_text("1")
+    (templates / "offline_app.html").write_text("<p>")
+    (templates / "offline.html").write_text("<p>")
+    first = static_build_id(static, templates)
+    assert static_build_id(static, templates) == first
+    (static / "vendor" / "model-viewer.min.js").write_text("big")
+    assert static_build_id(static, templates) == first
+    (static / "offline" / "main.mjs").write_text("2")
+    second = static_build_id(static, templates)
+    assert second != first
+    (templates / "offline_app.html").write_text("<p>changed")
+    assert static_build_id(static, templates) != second
+    (static / "offline" / "main.mjs").rename(static / "offline" / "other.mjs")
+    assert static_build_id(static, templates) not in (first, second)

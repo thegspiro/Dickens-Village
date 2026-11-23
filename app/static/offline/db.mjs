@@ -9,25 +9,49 @@ export const DB_NAME = "dickens-offline";
 const DB_VERSION = 1;
 let dbPromise = null;
 
+/*
+ * Stores and indexes, by the database version that added them. An upgrade
+ * creates only what is missing, so raising DB_VERSION to add a store (with a
+ * new entry here) works on phones that already have the older ones.
+ */
+const SCHEMA = [
+  ["items", { keyPath: "key" }, []],
+  ["extras", { keyPath: "key" }, ["itemKey"]],
+  ["photos", { keyPath: "key" }, ["itemKey"]],
+  ["catalog", { keyPath: "id" }, []],
+  ["meta", { keyPath: "k" }, []],
+];
+
+export function upgrade(db, tx) {
+  SCHEMA.forEach(function (spec) {
+    var store = db.objectStoreNames.contains(spec[0]) ? tx.objectStore(spec[0]) : db.createObjectStore(spec[0], spec[1]);
+    spec[2].forEach(function (index) {
+      if (!store.indexNames.contains(index)) store.createIndex(index, index);
+    });
+  });
+}
+
 function open() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise(function (resolve, reject) {
+    var settled = false;
     var req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = function () {
-      var db = req.result;
-      db.createObjectStore("items", { keyPath: "key" });
-      db.createObjectStore("extras", { keyPath: "key" }).createIndex("itemKey", "itemKey");
-      db.createObjectStore("photos", { keyPath: "key" }).createIndex("itemKey", "itemKey");
-      db.createObjectStore("catalog", { keyPath: "id" });
-      db.createObjectStore("meta", { keyPath: "k" });
-    };
+    req.onupgradeneeded = function () { upgrade(req.result, req.transaction); };
     req.onsuccess = function () {
       var db = req.result;
+      if (settled) { db.close(); return; } // gave up on this open (blocked); the next call opens again
+      settled = true;
       db.onversionchange = function () { db.close(); dbPromise = null; };
       resolve(db);
     };
-    req.onerror = function () { dbPromise = null; reject(req.error); };
-    req.onblocked = function () { reject(new Error("Close other tabs of the tracker and try again.")); };
+    req.onerror = function () { settled = true; dbPromise = null; reject(req.error); };
+    req.onblocked = function () {
+      // Another tab still has the older version open. Don't leave a failed open
+      // cached: the next storage call tries again.
+      settled = true;
+      dbPromise = null;
+      reject(new Error("Close other tabs of the tracker and try again."));
+    };
   });
   return dbPromise;
 }
