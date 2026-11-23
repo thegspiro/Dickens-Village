@@ -517,3 +517,62 @@ def test_a_proxy_refusal_is_reported_on_the_change_not_as_a_login_problem(phone,
     expect(page.locator("#sync-pill")).not_to_contain_text("Log in")
     page.goto("/app#/attention")
     expect(page.locator(".card", has_text=f"Proxy {tag}")).to_contain_text("HTTP 403")
+
+
+STORED_PHOTOS = """() => new Promise((resolve, reject) => {
+    const req = indexedDB.open('dickens-offline');
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+        const get = req.result.transaction('photos').objectStore('photos').getAll();
+        get.onsuccess = async () => {
+            const out = [];
+            for (const p of get.result) {
+                const bmp = await createImageBitmap(p.blob);
+                out.push({ key: p.key, type: p.blob.type, name: p.name, width: bmp.width, height: bmp.height,
+                           error: p.error && p.error.message });
+            }
+            req.result.close();
+            resolve(out);
+        };
+    };
+})"""
+
+
+def test_phone_shrinks_photos_before_storing_them(phone, tag, tmp_path):
+    from PIL import Image
+
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Big photo {tag}")
+    big = tmp_path / "camera.png"
+    Image.new("RGB", (3000, 4000), (120, 60, 50)).save(big)
+    open_app_and_sync(page)
+    go_offline(ctx, page)
+    page.goto(f"/app#/piece/s-{item_id}")
+    page.set_input_files('input[aria-label="Choose photos"]', str(big))
+    expect(page.locator("figcaption", has_text="Waiting to upload")).to_be_visible()
+    stored = page.evaluate(STORED_PHOTOS)
+    assert [(p["width"], p["height"], p["type"], p["name"]) for p in stored] == [(1500, 2000, "image/jpeg", "camera.jpg")]
+    back_online(ctx, page)
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    assert len({i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["photos"]) == 1
+    assert errors == []
+
+
+def test_a_failed_photo_upload_can_be_tried_again(phone, tag, images):
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Retry photo {tag}")
+    open_app_and_sync(page)
+    refuse = {"on": True}
+    page.route(f"**/api/v1/items/{item_id}/photos", lambda route: route.fulfill(
+        status=413, content_type="text/html", body="<h1>413 Request Entity Too Large</h1>")
+        if refuse["on"] else route.continue_())
+    page.goto(f"/app#/piece/s-{item_id}")
+    page.set_input_files('input[aria-label="Choose photos"]', str(images["house-red.jpg"]))
+    expect(page.locator("#sync-pill")).to_contain_text("1 need attention", timeout=30_000)
+    page.goto("/app#/attention")
+    expect(page.locator(".card", has_text="Photo for")).to_contain_text("Too large")
+    refuse["on"] = False  # e.g. the proxy's limit was raised
+    page.click('button:has-text("Try again")')
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    assert len({i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["photos"]) == 1
+    assert page.evaluate(STORED_PHOTOS) == []
