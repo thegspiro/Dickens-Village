@@ -75,7 +75,7 @@ Changes are saved on the phone, and the pill at the top shows how many are waiti
 
 If the same field was changed on the phone and somewhere else, that piece is held and listed under **Needs attention**. There you choose which value to keep for each field. Changes to different fields are combined automatically. Deleting pieces and managing links between buildings and figures stay on the full site.
 
-Logins last 30 days. If yours expires while you're offline, your changes stay on the phone and sync after you log in again. **Logging out erases the phone's copy**, and the app warns you first if anything hasn't synced.
+Logins last 30 days. If yours expires while you're offline, your changes stay on the phone and sync after you log in again. **Logging out erases the phone's copy**, and the app warns you first if anything hasn't synced. Logging out needs a connection; offline, nothing is erased. The bottom of the phone app's list has its own **Log out** button and **Erase this phone's copy**, which keeps you logged in.
 
 ### HTTPS and reverse proxies
 

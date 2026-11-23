@@ -10,6 +10,20 @@ export function setToken(token) {
   csrfToken = token;
 }
 
+/*
+ * Fetch a fresh security token. The server issues a new one at every login,
+ * so logging in again in another tab invalidates the one this page holds.
+ */
+export async function refreshToken() {
+  var res = await call("GET", "/session");
+  if (res.status !== 200 || !res.data || !res.data.csrf_token) {
+    // e.g. a proxy's own 403 page: not a login problem the person can fix by logging in
+    throw new ServerError((res.data && res.data.error) || "The server refused this (HTTP " + res.status + ").");
+  }
+  setToken(res.data.csrf_token);
+  return res;
+}
+
 export async function call(method, path, body, options) {
   var opts = options || {};
   var headers = { Accept: "application/json" };
@@ -29,9 +43,15 @@ export async function call(method, path, body, options) {
     throw new OfflineError("Can't reach the server.");
   }
   if (response.status === 401) throw new AuthError("Your login has expired.");
-  if (response.status === 403) throw new AuthError("Your login needs refreshing.");
   if (response.status === 304) return { status: 304, data: null, etag: opts.etag };
   var type = response.headers.get("Content-Type") || "";
+  if (response.status === 403 && type.indexOf("application/json") !== -1) {
+    // The API's own 403: this page's security token is out of date. Get the
+    // current one and try once more; a second refusal means the login itself is the problem.
+    if (method === "GET" || opts.retried) throw new AuthError("Your login needs refreshing.");
+    await refreshToken();
+    return call(method, path, body, Object.assign({}, opts, { retried: true }));
+  }
   if (type.indexOf("application/json") === -1) {
     if (response.status === 413) {
       // A proxy in front of the app refused the upload with its own error page.
