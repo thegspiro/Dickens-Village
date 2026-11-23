@@ -79,6 +79,65 @@ export async function apply(store, puts, removes) {
   return done(tx);
 }
 
+/*
+ * Read one record and write its replacement in a single transaction, so nothing
+ * saved in between is overwritten. fn(current) runs synchronously and returns
+ * the record to store, null to delete it, or undefined to leave it unchanged.
+ * Resolves to what fn returned.
+ */
+export async function update(store, key, fn) {
+  var db = await open();
+  var tx = db.transaction(store, "readwrite");
+  var os = tx.objectStore(store);
+  var result;
+  var failure = null;
+  os.get(key).onsuccess = function (event) {
+    try {
+      result = fn(event.target.result);
+      if (result === null) os.delete(key);
+      else if (result !== undefined) os.put(result);
+    } catch (err) {
+      failure = err;
+      tx.abort();
+    }
+  };
+  try {
+    await done(tx);
+  } catch (err) {
+    throw failure || err;
+  }
+  return result;
+}
+
+/*
+ * Read every record in a store and apply fn's changes in the same transaction.
+ * fn(records) runs synchronously and returns { put: [...], remove: [keys] }.
+ * Resolves to what fn returned.
+ */
+export async function mergeAll(store, fn) {
+  var db = await open();
+  var tx = db.transaction(store, "readwrite");
+  var os = tx.objectStore(store);
+  var result;
+  var failure = null;
+  os.getAll().onsuccess = function (event) {
+    try {
+      result = fn(event.target.result) || {};
+      (result.put || []).forEach(function (v) { os.put(v); });
+      (result.remove || []).forEach(function (k) { os.delete(k); });
+    } catch (err) {
+      failure = err;
+      tx.abort();
+    }
+  };
+  try {
+    await done(tx);
+  } catch (err) {
+    throw failure || err;
+  }
+  return result;
+}
+
 export async function replaceAll(store, values) {
   var db = await open();
   var tx = db.transaction(store, "readwrite");

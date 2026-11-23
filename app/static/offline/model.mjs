@@ -12,6 +12,10 @@
  *               phone and not yet accepted by the server
  *   conflict    [{field, base, mine, theirs}] when the server refused a change
  *   error       { message, errors } when the server rejected the values
+ *   creates     [fields, ...] sent in create requests that got no reply yet
+ *   inflight    { version, attempts: [changes, ...] } for patches sent without a
+ *               reply yet, all starting from server version `version`, so a 409
+ *               caused by this phone's own earlier write can be recognised
  *
  * Only fields in `dirty` are ever sent. Every other field follows the server,
  * so a change made elsewhere to a field the phone didn't touch is never undone.
@@ -36,6 +40,45 @@ export function pick(values, fields) {
   var out = {};
   fields.forEach(function (f) { if (values && Object.prototype.hasOwnProperty.call(values, f)) out[f] = values[f]; });
   return out;
+}
+
+/*
+ * Looser comparison for values the server may have rewritten in its canonical
+ * form: 12 vs "12.00", 1990 vs "1990", extra spaces in text. Only used to
+ * decide what still needs sending, never to decide what the server has.
+ */
+export function equivalent(a, b) {
+  if (same(a, b)) return true;
+  if (a == null || b == null || a === "" || b === "") return false;
+  if (typeof a === "boolean" || typeof b === "boolean") return false;
+  var na = Number(a), nb = Number(b);
+  if (String(a).trim() !== "" && String(b).trim() !== "" && !isNaN(na) && !isNaN(nb)) return na === nb;
+  return String(a).replace(/\s+/g, " ").trim() === String(b).replace(/\s+/g, " ").trim();
+}
+
+/*
+ * What is still to send after the server turned out to have created this
+ * record from one of `attempts` (create requests whose reply was lost), per
+ * field, with S the server's value and L the phone's:
+ *   L same as S                        -> nothing to send
+ *   S matches something the phone sent -> only the phone changed it since: send L on top of S
+ *   L matches something it sent        -> only another device changed it since: keep S
+ *   neither                            -> both changed it: send L based on the last
+ *                                         attempt, so the server reports a conflict
+ * With no attempts recorded there is nothing to compare, so the server wins.
+ */
+function unsentAfterCreate(local, serverValues, fields, attempts) {
+  var dirty = {};
+  if (!attempts || !attempts.length) return dirty;
+  var last = attempts[attempts.length - 1];
+  fields.forEach(function (f) {
+    var theirs = serverValues[f] === undefined ? null : serverValues[f];
+    if (equivalent(local[f], theirs)) return;
+    var sentValue = function (v) { return attempts.some(function (a) { return equivalent(a[f], v); }); };
+    if (sentValue(theirs)) dirty[f] = theirs;
+    else if (!sentValue(local[f])) dirty[f] = last[f] === undefined ? null : last[f];
+  });
+  return dirty;
 }
 
 export function isPending(rec) {
@@ -76,6 +119,27 @@ export function patchPayload(rec) {
   return { base: Object.assign({}, rec.dirty), changes: pick(rec.local, fields) };
 }
 
+/* Remember a create that is about to be sent (see afterCreate). */
+export function markCreateSent(rec, fields) {
+  var next = clone(rec);
+  next.creates = (next.creates || []).concat([Object.assign({}, fields)]);
+  return next;
+}
+
+/*
+ * Remember a patch that is about to be sent (see afterConflict). Attempts whose
+ * reply never came are kept, with the version the first of them started from:
+ * a snapshot may have moved rec.server on to the version one of them created.
+ */
+export function markSent(rec, changes) {
+  var next = clone(rec);
+  var version = next.inflight ? next.inflight.version
+    : rec.server && rec.server.version != null ? rec.server.version : null;
+  var attempts = next.inflight ? next.inflight.attempts : [];
+  next.inflight = { version: version, attempts: attempts.concat([Object.assign({}, changes)]) };
+  return next;
+}
+
 /* Fold fresh server values into a record, keeping the phone's unsent edits. */
 export function withServer(rec, serverValues, fields) {
   var next = clone(rec);
@@ -97,25 +161,66 @@ export function afterPatch(rec, sent, serverValues, fields) {
   });
   next.conflict = null;
   next.error = null;
+  next.inflight = null;
   return withServer(next, serverValues, fields);
 }
 
-/* The server created a record the phone made. `sent` is the fields object. */
-export function afterCreate(rec, sent, serverValues, fields) {
+/*
+ * The server answered a create the phone made. `sent` is the fields object.
+ * created === false means an earlier attempt had already created it (its reply
+ * was lost): the server kept that attempt's values and ignored `sent`, so
+ * whatever the phone has that differs from the server still has to be sent.
+ */
+export function afterCreate(rec, sent, serverValues, fields, created) {
   var next = clone(rec);
-  // Anything edited again while the create was in flight becomes an edit on top.
-  next.dirty = {};
-  fields.forEach(function (f) {
-    if (!same(next.local[f], sent[f])) next.dirty[f] = serverValues[f] === undefined ? null : serverValues[f];
-  });
+  if (created === false) {
+    next.dirty = unsentAfterCreate(next.local, serverValues, fields, next.creates || [sent]);
+  } else {
+    // Anything edited again while the create was in flight becomes an edit on top.
+    next.dirty = {};
+    fields.forEach(function (f) {
+      if (!same(next.local[f], sent[f])) next.dirty[f] = serverValues[f] === undefined ? null : serverValues[f];
+    });
+  }
   next.error = null;
+  next.creates = null;
   return withServer(next, serverValues, fields);
 }
 
+/*
+ * The server refused a patch because a field changed there too.
+ * If the server is exactly one version past the one this phone's unanswered
+ * patches started from, only one write happened since. When the server holds a
+ * value one of those patches sent, that write was this phone's own and its
+ * reply never arrived: the field is re-based on it instead of being shown as a
+ * conflict with "another device". Returns the record; when nothing is left in
+ * conflict it is ready to send again.
+ */
 export function afterConflict(rec, conflicts, serverValues, fields) {
   var next = withServer(rec, serverValues, fields);
-  next.conflict = conflicts;
+  var sent = rec.inflight;
+  var ownWrite = Boolean(sent && sent.version != null && serverValues.version === sent.version + 1);
+  var real = [];
+  (conflicts || []).forEach(function (c) {
+    var mine = ownWrite && sent.attempts.some(function (changes) {
+      return Object.prototype.hasOwnProperty.call(changes, c.field) && same(c.theirs, changes[c.field]);
+    });
+    if (mine) next.dirty[c.field] = c.theirs;
+    else real.push(c);
+  });
+  next.conflict = real.length ? real : null;
+  next.inflight = null;
   return next;
+}
+
+/*
+ * An unsent extra or photo whose piece is no longer on the phone. Shallow copy:
+ * photo records hold a Blob, which a JSON clone would destroy.
+ */
+export function orphaned(rec) {
+  return Object.assign({}, rec, {
+    error: { message: "Its piece was deleted on another device, so this can't be saved. Discard it to clear this." },
+  });
 }
 
 /*
@@ -149,6 +254,7 @@ export function discardChanges(rec, fields) {
   next.dirty = {};
   next.conflict = null;
   next.error = null;
+  next.inflight = null;
   return next;
 }
 
@@ -176,7 +282,12 @@ export function mergeSnapshot(existing, serverRows, fields, keyPrefix, extraFor)
         server: null, local: {}, dirty: {}, conflict: null, error: null }, extra);
     } else {
       rec = Object.assign(clone(rec), extra);
-      if (rec.id == null) rec.dirty = {}; // its create succeeded but the reply was lost
+      // Its create succeeded but the reply was lost. The server has the values that
+      // create sent; anything edited on the phone since still has to be sent.
+      if (rec.id == null) {
+        rec.dirty = unsentAfterCreate(rec.local, row, fields, rec.creates);
+        rec.creates = null;
+      }
     }
     put.push(withServer(rec, row, fields));
     seen[rec.key] = true;

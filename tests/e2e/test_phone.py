@@ -230,3 +230,103 @@ def test_other_browsers_do_not_keep_a_copy(desk):
     page.reload()
     page.wait_for_timeout(1500)
     assert page.evaluate("indexedDB.databases().then(d => d.map(x => x.name))") == []
+
+
+def lose_replies(page, pattern, method):
+    """Let matching requests reach the server but drop the reply, like flaky Wi-Fi."""
+    def handler(route):
+        if route.request.method == method:
+            route.fetch()
+            route.abort()
+        else:
+            route.continue_()
+    page.route(pattern, handler)
+
+
+def test_edit_after_a_lost_create_reply_still_syncs(phone, tag):
+    ctx, page, errors = phone
+    open_app_and_sync(page)
+    go_offline(ctx, page)
+    page.goto("/app#/new")
+    page.select_option("#f-category", "figure")
+    page.fill("#f-name", f"Lamplighter {tag}")
+    page.fill("#f-storage_tub", "1")
+    page.click('button:has-text("Add piece")')
+    expect(page.locator(".flash-pending")).to_be_visible()
+    key = page.evaluate("decodeURIComponent(location.hash.split('/')[2])")
+    ctx.set_offline(False)
+    lose_replies(page, "**/api/v1/items", "POST")
+    page.evaluate("window.dispatchEvent(new Event('online'))")
+    page.wait_for_timeout(2500)  # the create reached the server; the phone never heard back
+    page.unroute("**/api/v1/items")
+    ctx.set_offline(True)
+    page.goto(f"/app#/edit/{key}")
+    page.fill("#f-storage_tub", "4")
+    page.click('button:has-text("Save changes")')
+    back_online(ctx, page)
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    pieces = [i for i in api_snapshot(page)["items"] if i["name"] == f"Lamplighter {tag}"]
+    assert len(pieces) == 1 and pieces[0]["storage_tub"] == "4"
+    assert [e for e in errors if e.startswith("pageerror")] == []  # dropped replies log network errors
+
+
+def test_editing_the_same_field_after_a_lost_patch_reply_is_not_a_conflict(phone, tag):
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Bookseller {tag}", storage_tub="1")
+    open_app_and_sync(page)
+    page.goto(f"/app#/edit/s-{item_id}")
+    lose_replies(page, f"**/api/v1/items/{item_id}", "PATCH")
+    page.fill("#f-storage_tub", "2")
+    page.click('button:has-text("Save changes")')
+    page.wait_for_timeout(2500)  # saved on the server as tub 2; the reply was lost
+    page.unroute(f"**/api/v1/items/{item_id}")
+    assert {i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["storage_tub"] == "2"
+    page.goto(f"/app#/edit/s-{item_id}")
+    page.fill("#f-storage_tub", "3")
+    page.click('button:has-text("Save changes")')
+    page.click("#sync-pill button")
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    expect(page.locator("#sync-pill")).not_to_contain_text("attention")
+    assert {i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["storage_tub"] == "3"
+    assert [e for e in errors if e.startswith("pageerror")] == []  # dropped replies log network errors
+
+
+def test_background_sync_does_not_wipe_a_half_filled_form(phone, tag):
+    ctx, page, errors = phone
+    open_app_and_sync(page)
+    page.goto("/app#/new")
+    page.fill("#f-name", f"Half typed {tag}")
+    page.fill("#f-storage_tub", "8")
+    page.locator("h1").click()  # focus leaves the fields, as when switching apps
+    page.click("#sync-pill button")
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    page.wait_for_timeout(300)
+    expect(page.locator("#f-name")).to_have_value(f"Half typed {tag}")
+    expect(page.locator("#f-storage_tub")).to_have_value("8")
+    assert errors == []
+
+
+def test_unsynced_extra_of_a_piece_deleted_elsewhere_needs_attention(phone, make_context, tag):
+    ctx, page, errors = phone
+    _, desk, _ = make_context()
+    login(desk)
+    item_id = add_piece(desk, f"Short-lived {tag}")
+    open_app_and_sync(page)
+    go_offline(ctx, page)
+    page.goto(f"/app#/piece/s-{item_id}/extra/new")
+    page.fill("#f-description", "Spare bulb")
+    page.click('button:has-text("Add extra")')
+    expect(page.locator(".badge-pending", has_text="Not synced yet")).to_be_visible()
+    desk.goto(f"/items/{item_id}/delete")
+    desk.click('button:has-text("Delete permanently")')
+    back_online(ctx, page)
+    expect(page.locator("#sync-pill")).to_contain_text("1 need attention", timeout=30_000)
+    page.goto("/app#/attention")
+    card = page.locator(".card", has_text="Spare bulb")
+    expect(card).to_contain_text("a deleted piece")
+    expect(card.locator("a:has-text('Edit to fix')")).to_have_count(0)
+    page.on("dialog", lambda d: d.accept())
+    card.locator('button:has-text("Discard my changes")').click()
+    expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
+    expect(page.locator("#sync-pill")).not_to_contain_text("waiting")
+    assert [e for e in errors if e.startswith("pageerror")] == []  # the server's 404 for the extra is logged

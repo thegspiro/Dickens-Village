@@ -142,7 +142,7 @@ function renderPill(status) {
 
 events.addEventListener("status", function (e) {
   renderPill(e.detail);
-  if (e.detail.state === "idle" || e.detail.state === "offline") route(); // show fresh data
+  if (e.detail.state === "idle" || e.detail.state === "offline") route({ background: true }); // show fresh data
 });
 
 var syncTimer = null;
@@ -471,10 +471,18 @@ async function editView(key) {
       build(errors);
       return;
     }
-    var saved = rec ? m.editRecord(rec, input, m.ITEM_FIELDS)
-      : Object.assign(m.newLocalRecord("", uuid(), input, m.ITEM_FIELDS), { photos: [] });
-    if (rec) saved.photos = rec.photos || [];
-    await db.put("items", saved);
+    var saved;
+    if (rec) {
+      // Apply the edit to the record as stored now: a sync may have changed it
+      // (uploaded it, updated other fields) since this form was opened.
+      saved = await db.update("items", key, function (current) {
+        return current ? m.editRecord(current, input, m.ITEM_FIELDS) : undefined;
+      });
+      if (!saved) { window.alert(GONE); location.hash = "#/"; return; }
+    } else {
+      saved = Object.assign(m.newLocalRecord("", uuid(), input, m.ITEM_FIELDS), { photos: [] });
+      await db.put("items", saved);
+    }
     await countPending();
     location.hash = "#/piece/" + encodeURIComponent(saved.key);
     syncSoon();
@@ -513,9 +521,14 @@ async function extraView(itemKey, extraKey) {
       errors.quantity = "Quantity must be a whole number from 1 to 999.";
     }
     if (Object.keys(errors).length) { Object.assign(values, input); build(errors); return; }
-    var saved = rec ? m.editRecord(rec, input, m.EXTRA_FIELDS)
-      : m.newLocalRecord("e", uuid(), input, m.EXTRA_FIELDS, { itemKey: itemKey });
-    await db.put("extras", saved);
+    if (rec) {
+      var saved = await db.update("extras", extraKey, function (current) {
+        return current ? m.editRecord(current, input, m.EXTRA_FIELDS) : undefined;
+      });
+      if (!saved) { window.alert(GONE); location.hash = "#/piece/" + encodeURIComponent(itemKey); return; }
+    } else {
+      await db.put("extras", m.newLocalRecord("e", uuid(), input, m.EXTRA_FIELDS, { itemKey: itemKey }));
+    }
     await countPending();
     location.hash = "#/piece/" + encodeURIComponent(itemKey);
     syncSoon();
@@ -552,8 +565,9 @@ async function attentionView() {
       rec.conflict.forEach(function (c) {
         picks[c.field] = form.elements["c-" + rec.key + "-" + c.field].value;
       });
-      var fresh = await db.get(store, rec.key);
-      await db.put(store, m.resolveConflict(fresh, picks));
+      await db.update(store, rec.key, function (current) {
+        return current ? m.resolveConflict(current, picks) : undefined;
+      });
       await countPending();
       syncSoon();
       route();
@@ -566,14 +580,17 @@ async function attentionView() {
       var what = rec.id == null ? "This deletes it from the phone; it was never saved to the server."
         : "The phone goes back to the server's version of it.";
       if (!window.confirm("Discard your unsynced changes? " + what)) return;
-      var fresh = await db.get(store, rec.key);
-      var kept = fresh && m.discardChanges(fresh, fields);
       // Fetch the full server copy next time even if nothing changed there, so a
       // piece that was deleted elsewhere disappears from the phone too.
       await db.setMeta("snapshotEtag", null);
-      if (kept) await db.put(store, kept);
-      else if (fresh) {
-        await db.del(store, rec.key);
+      var deleted = false;
+      await db.update(store, rec.key, function (current) {
+        if (!current) return undefined;
+        var kept = m.discardChanges(current, fields);
+        deleted = !kept;
+        return kept; // null deletes a record the server never had
+      });
+      if (deleted) {
         if (store === "items") { // its unsent extras and photos go with it
           var ex = await db.byItem("extras", rec.key);
           await db.apply("extras", [], ex.map(function (e) { return e.key; }));
@@ -589,7 +606,7 @@ async function attentionView() {
 
   function errorCard(rec, title, href, store, fields) {
     return h("div", { class: "card" }, h("h2", null, title), statusBanner(rec, "item"),
-      h("a", { class: "button", href: href }, "Edit to fix"), " ", discardButton(rec, store, fields));
+      href ? [h("a", { class: "button", href: href }, "Edit to fix"), " "] : null, discardButton(rec, store, fields));
   }
 
   var parts = [];
@@ -599,13 +616,15 @@ async function attentionView() {
       : errorCard(r, title, "#/edit/" + encodeURIComponent(r.key), "items", m.ITEM_FIELDS));
   });
   extras.forEach(function (r) {
-    var title = "Extra “" + r.local.description + "” on " + (itemNames[r.itemKey] || "a piece");
+    var hasPiece = Object.prototype.hasOwnProperty.call(itemNames, r.itemKey);
+    var title = "Extra “" + r.local.description + "” on " + (hasPiece ? itemNames[r.itemKey] || "(no name)" : "a deleted piece");
     parts.push(r.conflict ? conflictForm(r, "extras", title)
-      : errorCard(r, title, "#/piece/" + encodeURIComponent(r.itemKey) + "/extra/" + encodeURIComponent(r.key),
+      : errorCard(r, title, hasPiece ? "#/piece/" + encodeURIComponent(r.itemKey) + "/extra/" + encodeURIComponent(r.key) : null,
         "extras", m.EXTRA_FIELDS));
   });
   photos.forEach(function (p) {
-    parts.push(h("div", { class: "card" }, h("h2", null, "Photo for " + (itemNames[p.itemKey] || "a piece")),
+    var hasPiece = Object.prototype.hasOwnProperty.call(itemNames, p.itemKey);
+    parts.push(h("div", { class: "card" }, h("h2", null, "Photo for " + (hasPiece ? itemNames[p.itemKey] || "(no name)" : "a deleted piece")),
       h("p", { class: "flash flash-error" }, p.error.message),
       h("button", { type: "button", class: "danger", onclick: async function () {
         await db.del("photos", p.key); await refreshPill(); route();
@@ -616,6 +635,8 @@ async function attentionView() {
     h("p", null, h("a", { href: "#/" }, "Back to my collection"))];
 }
 
+var GONE = "This was removed from the phone while you were editing (it was deleted on another device), so your changes couldn't be saved.";
+
 function notFound() {
   return h("section", { class: "card" }, h("h1", null, "Not found"),
     h("p", null, "That isn't on this phone (it may have been deleted elsewhere)."), h("a", { href: "#/" }, "Back"));
@@ -623,12 +644,27 @@ function notFound() {
 
 /* ---- routing -------------------------------------------------------------- */
 
-async function route() {
-  var hash = location.hash.replace(/^#/, "") || "/";
+/* Screens where the person types or chooses something a redraw would throw away. */
+var FORM_PATH = /^(new|edit\/|piece\/[^/]+\/extra\/|attention)/;
+
+/*
+ * Draw the screen for the current address. A background refresh (a sync
+ * finished) leaves forms and the conflict screen alone, and doesn't redraw the
+ * list while its search box is being typed in: the next navigation shows fresh data.
+ */
+async function route(options) {
+  var background = Boolean(options && options.background);
+  var startHash = location.hash;
+  var hash = startHash.replace(/^#/, "") || "/";
   var qIndex = hash.indexOf("?");
   var path = qIndex === -1 ? hash : hash.slice(0, qIndex);
   var params = new URLSearchParams(qIndex === -1 ? "" : hash.slice(qIndex + 1));
   var parts = path.split("/").filter(Boolean).map(decodeURIComponent);
+  if (background && shownHash === location.hash) {
+    if (FORM_PATH.test(path.replace(/^\//, ""))) return;
+    var active = document.activeElement;
+    if (active && root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return;
+  }
   var view;
   try {
     if (!parts.length) view = await listView(params);
@@ -643,10 +679,9 @@ async function route() {
     view = h("section", { class: "card" }, h("h1", null, "Something went wrong"),
       h("p", null, "This phone's storage couldn't be read. Your saved changes are still there; try reloading."));
   }
-  // Don't replace a form the person is typing in when a background sync finishes.
-  var active = document.activeElement;
-  if (active && root.contains(active) && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) &&
-      /^(new|edit|piece\/.+\/extra)/.test(path.replace(/^\//, ""))) return;
+  // The address changed while this screen was read from storage: the newer
+  // route() call draws that one, so don't cover it with this older screen.
+  if (location.hash !== startHash) return;
   show(view);
 }
 
