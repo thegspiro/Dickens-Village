@@ -34,7 +34,7 @@ MAX_EDGE = 2000
 # our checks below are stricter for everything decoded at full size.
 Image.MAX_IMAGE_PIXELS = MAX_JPEG_PIXELS
 JPEG_QUALITY = 85
-THUMB_EDGE = 320
+THUMB_EDGE = 480  # sharp at gallery size on 2x screens; photos stored before this have 320px thumbnails
 FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.jpg$")
 
 

@@ -253,7 +253,7 @@ def test_photo_upload_idempotent(logged_in, fake_repo, app):
     assert retry.status_code == 200 and retry.get_json()["photo"]["id"] == first.get_json()["photo"]["id"]
     assert len(fake_repo.photos) == 1
     snap = logged_in.get("/api/v1/snapshot").get_json()
-    assert snap["items"][0]["photos"] == [{"id": first.get_json()["photo"]["id"], "client_uuid": cu}]
+    assert snap["items"][0]["photos"] == [{"id": first.get_json()["photo"]["id"], "client_uuid": cu, "caption": None}]
     bad = logged_in.post(f"/api/v1/items/{item_id}/photos", data={"client_uuid": new_uuid(),
                          "photo": (png_bytes().__class__(b"nope"), "x.jpg")}, headers=h,
                          content_type="multipart/form-data")

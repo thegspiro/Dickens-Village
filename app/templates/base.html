@@ -14,6 +14,7 @@
   <title>{% block title %}Collection{% endblock %} · Dickens Village Tracker</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <script type="module" src="{{ url_for('static', filename='gallery.mjs') }}"></script>
   {% block scripts %}{% endblock %}
 </head>
 <body{% if current_user() %} data-logged-in="1"{% endif %}>

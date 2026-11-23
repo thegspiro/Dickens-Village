@@ -31,12 +31,24 @@ _EXTRAS_COUNT = (
     "(SELECT COALESCE(SUM(e.quantity), 0) FROM item_extras e WHERE e.item_id = i.id) AS extras_count"
 )
 
+# The cover is the first photo in the chosen order.
+_COVER_PHOTO = (
+    "(SELECT p.id FROM item_photos p WHERE p.item_id = i.id ORDER BY p.sort_order, p.id LIMIT 1) AS cover_photo_id"
+)
+
+# Fingerprint of photo rows for ETags: changes when a photo is added, removed,
+# moved (id weighted by position) or re-captioned.
+_PHOTOS_FINGERPRINT = (
+    "CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0), COALESCE(SUM(id * (sort_order + 1)), 0), "
+    "COALESCE(SUM(CRC32(COALESCE(caption, ''))), 0))"
+)
+
 
 _CATALOG_FIELDS = (
     "c.id, c.list_name, c.item_number, c.name, c.details, c.series, c.year_issued, "
     "c.year_retired, c.is_current, c.srp_usd, c.srp_cad, c.default_category, "
     "p.name AS parent_name, p.item_number AS parent_item_number, "
-    "(SELECT MIN(cp.id) FROM catalog_photos cp WHERE cp.catalog_id = c.id) AS photo_id, "
+    "(SELECT cp.id FROM catalog_photos cp WHERE cp.catalog_id = c.id ORDER BY cp.sort_order, cp.id LIMIT 1) AS photo_id, "
     "(SELECT COUNT(*) FROM catalog_photos cp WHERE cp.catalog_id = c.id) AS photo_count"
 )
 
@@ -134,7 +146,7 @@ class MySQLRepository:
 
         total_row = self._one(f"SELECT COUNT(*) AS n FROM items i {where_sql}", params)
         rows = self._all(
-            f"SELECT i.*, {_EXTRAS_COUNT} FROM items i {where_sql} "
+            f"SELECT i.*, {_EXTRAS_COUNT}, {_COVER_PHOTO} FROM items i {where_sql} "
             f"ORDER BY {order_sql} LIMIT %s OFFSET %s",
             [*params, PAGE_SIZE, (page - 1) * PAGE_SIZE],
         )
@@ -242,7 +254,8 @@ class MySQLRepository:
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         items = self._all("SELECT * FROM items ORDER BY id")
         extras = self._all("SELECT * FROM item_extras ORDER BY item_id, id")
-        photos = self._all("SELECT id, item_id, client_uuid FROM item_photos ORDER BY item_id, id")
+        photos = self._all("SELECT id, item_id, client_uuid, caption FROM item_photos "
+                           "ORDER BY item_id, sort_order, id")
         scans = self._all("SELECT id, item_id FROM item_scans ORDER BY item_id, id")
         self._end_read()
         return {"items": items, "extras": extras, "photos": photos, "scans": scans}
@@ -252,7 +265,7 @@ class MySQLRepository:
             "SELECT "
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(version), 0), COALESCE(MAX(id), 0)) FROM items) AS i, "
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(version), 0), COALESCE(MAX(id), 0)) FROM item_extras) AS e, "
-            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_photos) AS p, "
+            f"(SELECT {_PHOTOS_FINGERPRINT} FROM item_photos) AS p, "
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_scans) AS s"
         )
         self._end_read()
@@ -269,7 +282,7 @@ class MySQLRepository:
     def catalog_etag(self) -> str:
         row = self._one(
             "SELECT (SELECT CONCAT_WS(':', COUNT(*), COALESCE(MAX(updated_at), '')) FROM catalog_items) AS c, "
-            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM catalog_photos) AS p"
+            f"(SELECT {_PHOTOS_FINGERPRINT} FROM catalog_photos) AS p"
         )
         self._end_read()
         return f"{row['c']}/{row['p']}"
@@ -469,7 +482,7 @@ class MySQLRepository:
 
     def list_photos(self, item_id: int) -> list[dict[str, Any]]:
         rows = self._all(
-            "SELECT * FROM item_photos WHERE item_id = %s ORDER BY created_at, id", (item_id,)
+            "SELECT * FROM item_photos WHERE item_id = %s ORDER BY sort_order, id", (item_id,)
         )
         self._end_read()
         return rows
@@ -485,11 +498,51 @@ class MySQLRepository:
             cur.execute("SELECT id FROM items WHERE id = %s FOR UPDATE", (item_id,))
             if cur.fetchone() is None:
                 return None
+            # New photos go last; the item row lock keeps two uploads from taking the same place.
             cur.execute(
-                "INSERT INTO item_photos (item_id, filename, original_name, client_uuid) VALUES (%s, %s, %s, %s)",
-                (item_id, filename, original_name, client_uuid),
+                "INSERT INTO item_photos (item_id, filename, original_name, client_uuid, sort_order) "
+                "SELECT %s, %s, %s, %s, COALESCE(MAX(sort_order) + 1, 0) FROM item_photos WHERE item_id = %s",
+                (item_id, filename, original_name, client_uuid, item_id),
             )
             return int(cur.lastrowid)
+
+    def reorder_photos(self, item_id: int, photo_ids: list[int]) -> bool:
+        """Put an item's photos in this order (the first is the cover).
+
+        photo_ids must list every photo of the item exactly once; otherwise
+        nothing changes and False is returned (also when the item is gone).
+        """
+        return self._reorder("items", "item_photos", "item_id", item_id, photo_ids)
+
+    def set_photo_caption(self, photo_id: int, caption: str | None) -> dict[str, Any] | None:
+        """Set or clear a photo's caption. Returns the photo row, or None if it doesn't exist."""
+        return self._set_caption("item_photos", photo_id, caption)
+
+    def _reorder(self, parent_table: str, photo_table: str, parent_column: str, parent_id: int,
+                 photo_ids: list[int]) -> bool:
+        # Table and column names come from the two fixed callers above.
+        with self._write() as cur:
+            cur.execute(f"SELECT id FROM {parent_table} WHERE id = %s FOR UPDATE", (parent_id,))
+            if cur.fetchone() is None:
+                return False
+            cur.execute(f"SELECT id FROM {photo_table} WHERE {parent_column} = %s FOR UPDATE", (parent_id,))
+            current = sorted(int(row["id"]) for row in cur.fetchall())
+            if sorted(photo_ids) != current:
+                return False
+            for position, photo_id in enumerate(photo_ids):
+                cur.execute(f"UPDATE {photo_table} SET sort_order = %s WHERE id = %s", (position, photo_id))
+        log.info("Reordered %d photos of %s id=%s", len(photo_ids), parent_table, parent_id)
+        return True
+
+    def _set_caption(self, photo_table: str, photo_id: int, caption: str | None) -> dict[str, Any] | None:
+        with self._write() as cur:
+            cur.execute(f"SELECT * FROM {photo_table} WHERE id = %s FOR UPDATE", (photo_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cur.execute(f"UPDATE {photo_table} SET caption = %s WHERE id = %s", (caption, photo_id))
+        row["caption"] = caption
+        return row
 
     # -- 3D scans --------------------------------------------------------------
 
@@ -581,7 +634,7 @@ class MySQLRepository:
 
     def list_catalog_photos(self, catalog_id: int) -> list[dict[str, Any]]:
         rows = self._all(
-            "SELECT * FROM catalog_photos WHERE catalog_id = %s ORDER BY created_at, id", (catalog_id,)
+            "SELECT * FROM catalog_photos WHERE catalog_id = %s ORDER BY sort_order, id", (catalog_id,)
         )
         self._end_read()
         return rows
@@ -597,10 +650,18 @@ class MySQLRepository:
             if cur.fetchone() is None:
                 return None
             cur.execute(
-                "INSERT INTO catalog_photos (catalog_id, filename, original_name) VALUES (%s, %s, %s)",
-                (catalog_id, filename, original_name),
+                "INSERT INTO catalog_photos (catalog_id, filename, original_name, sort_order) "
+                "SELECT %s, %s, %s, COALESCE(MAX(sort_order) + 1, 0) FROM catalog_photos WHERE catalog_id = %s",
+                (catalog_id, filename, original_name, catalog_id),
             )
             return int(cur.lastrowid)
+
+    def reorder_catalog_photos(self, catalog_id: int, photo_ids: list[int]) -> bool:
+        """Same contract as reorder_photos, for a catalog entry's reference photos."""
+        return self._reorder("catalog_items", "catalog_photos", "catalog_id", catalog_id, photo_ids)
+
+    def set_catalog_photo_caption(self, photo_id: int, caption: str | None) -> dict[str, Any] | None:
+        return self._set_caption("catalog_photos", photo_id, caption)
 
     def delete_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
         with self._write() as cur:

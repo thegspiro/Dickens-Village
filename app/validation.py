@@ -275,6 +275,32 @@ def parse_positive_int(raw: str | None) -> int | None:
     return value
 
 
+MAX_CAPTION = 300
+
+
+def parse_caption(raw: str | None) -> tuple[str | None, str | None]:
+    """A photo caption: one line, spaces collapsed, at most 300 characters.
+
+    Returns (caption or None for blank, error message or None).
+    """
+    value = " ".join("".join(ch for ch in (raw or "") if ch.isprintable() or ch.isspace()).split())
+    if not value:
+        return None, None
+    if len(value) > MAX_CAPTION:
+        return None, f"Captions must be {MAX_CAPTION} characters or fewer."
+    return value, None
+
+
+def parse_id_list(raw: str | None, limit: int = 1000) -> list[int] | None:
+    """A comma-separated list of distinct positive ids ("12,9,30"), or None if malformed."""
+    if raw is None or not raw.strip():
+        return None
+    ids = [parse_positive_int(part) for part in raw.split(",")]
+    if any(i is None for i in ids) or len(ids) > limit or len(set(ids)) != len(ids):
+        return None
+    return [i for i in ids if i is not None]
+
+
 SORTS: dict[str, str] = {
     "name": "Name",
     "category": "Category",

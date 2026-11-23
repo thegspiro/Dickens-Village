@@ -143,7 +143,8 @@ def snapshot() -> Any:
         extras.setdefault(row["item_id"], []).append(extra_to_json(row))
     photo_map: dict[int, list[dict[str, Any]]] = {}
     for row in data["photos"]:
-        photo_map.setdefault(row["item_id"], []).append({"id": row["id"], "client_uuid": row["client_uuid"]})
+        photo_map.setdefault(row["item_id"], []).append(
+            {"id": row["id"], "client_uuid": row["client_uuid"], "caption": row.get("caption")})
     scan_map: dict[int, list[dict[str, Any]]] = {}
     for row in data.get("scans", []):
         scan_map.setdefault(row["item_id"], []).append({"id": row["id"]})
