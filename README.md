@@ -97,10 +97,21 @@ These are copies for you to keep or use elsewhere; for a restorable backup, see 
 
 ## Backups
 
+From the folder with `docker-compose.yml`, while the app is running:
 ```sh
-docker compose exec db sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > dickens-backup.sql
+scripts/backup.sh /path/to/backups
 ```
-Also back up the uploads volume or folder.
+Each run writes `dickens-backup-YYYYMMDD-HHMMSS/` with `database.sql.gz` (a consistent `mysqldump`), `uploads.tar.gz` (every photo and scan) and `SHA256SUMS`. Both archives are checked before the script reports success, and the folder is readable by you only. Set `KEEP=14` to also delete all but the 14 newest backups in that folder. To run it every night, add it to cron (on Unraid, the User Scripts plugin), for example `cd /mnt/user/appdata/dickens-village && KEEP=14 scripts/backup.sh /mnt/user/backups/dickens-village`.
+
+To restore one, which **replaces** the current data:
+```sh
+docker compose stop app
+gunzip -c BACKUP/database.sql.gz | docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u"$MYSQL_USER" "$MYSQL_DATABASE"'
+gunzip -c BACKUP/uploads.tar.gz | docker compose run --rm -T --no-deps --entrypoint tar app -xf - -C /data/uploads
+docker compose start app
+```
+
+On AWS with RDS, run `mysqldump --single-transaction` against the RDS endpoint and back up the EFS uploads folder (or use RDS snapshots and AWS Backup).
 
 ## Tidying the upload folder
 

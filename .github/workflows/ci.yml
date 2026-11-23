@@ -173,8 +173,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Check entrypoint is valid POSIX sh
-        run: sh -n docker/entrypoint.sh
+      - name: Check shell scripts are valid POSIX sh
+        run: |
+          for f in docker/entrypoint.sh scripts/backup.sh scripts/fetch_vendor.sh; do sh -n "$f" || exit 1; done
       - name: Build runtime image
         run: docker build --target runtime -t dickens-village-tracker:ci .
       - name: Build test image
