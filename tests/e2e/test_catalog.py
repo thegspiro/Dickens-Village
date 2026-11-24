@@ -98,3 +98,28 @@ def test_catalog_pages_photos_and_add_to_collection(desk, tag, images):
     page.fill("#catalog-lookup", "56.65080")
     expect(page.locator("#catalog-results img.combo-thumb").first).to_be_visible()
     assert errors == []
+
+
+def test_use_a_piece_photo_as_catalog_photo(desk, tag, images):
+    ctx, page, errors = desk
+    page.goto("/items/new")
+    page.fill("#catalog-lookup", "56.65161")
+    page.locator("#catalog-results li").first.click()
+    page.fill("#name", f"Copied photo {tag}")
+    page.click('button:has-text("Add piece")')
+    page.wait_for_url(re.compile(r"/items/\d+$"))
+    page.set_input_files("#photo", str(images["house-red.jpg"]))
+    page.click('#photos button:has-text("Upload")')
+    expect(page.locator(".flash-success")).to_contain_text("Added 1 photo.")
+    figure = page.locator("#photos [data-gallery] .photo").first
+    figure.locator("summary").click()
+    figure.locator("input[name=caption]").fill(f"Front {tag}")
+    figure.locator('button:has-text("Save caption")').click()
+    page.locator("#photos [data-gallery] .photo").first.locator("summary").click()
+    page.locator('button:has-text("Use as catalog photo")').click()
+    expect(page.locator(".flash-success")).to_contain_text("Added to the catalog entry's reference photos.")
+    # the piece page now shows it among the catalog reference photos too (the second gallery)
+    expect(page.locator("#photos [data-gallery]").nth(1)).to_contain_text(f"Front {tag}")
+    page.locator('a:has-text("Manage catalog photos")').click()
+    expect(page.locator("#photos figcaption", has_text=f"Front {tag}")).to_be_visible()
+    assert errors == []

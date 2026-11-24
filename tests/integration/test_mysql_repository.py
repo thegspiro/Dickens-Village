@@ -676,3 +676,16 @@ def test_export_data_reads_everything_consistently(db_config, repo):
     # the connection is usable for writes afterwards (the read-only snapshot ended)
     repo.update_item(building, item(name="Renamed after export"))
     assert repo.get_item(building)["name"] == "Renamed after export"
+
+
+def test_add_catalog_photo_with_a_caption(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    entry = repo.search_catalog("56.65161")[0]
+    with_caption = repo.add_catalog_photo(entry["id"], "c1" * 16 + ".jpg", "a.jpg", "Box art")
+    without = repo.add_catalog_photo(entry["id"], "c2" * 16 + ".jpg", None)
+    assert repo.get_catalog_photo(with_caption)["caption"] == "Box art"
+    assert repo.get_catalog_photo(without)["caption"] is None

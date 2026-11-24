@@ -646,15 +646,16 @@ class MySQLRepository:
         self._end_read()
         return row
 
-    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None) -> int | None:
+    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None,
+                          caption: str | None = None) -> int | None:
         with self._write() as cur:
             cur.execute("SELECT id FROM catalog_items WHERE id = %s FOR UPDATE", (catalog_id,))
             if cur.fetchone() is None:
                 return None
             cur.execute(
-                "INSERT INTO catalog_photos (catalog_id, filename, original_name, sort_order) "
-                "SELECT %s, %s, %s, COALESCE(MAX(sort_order) + 1, 0) FROM catalog_photos WHERE catalog_id = %s",
-                (catalog_id, filename, original_name, catalog_id),
+                "INSERT INTO catalog_photos (catalog_id, filename, original_name, caption, sort_order) "
+                "SELECT %s, %s, %s, %s, COALESCE(MAX(sort_order) + 1, 0) FROM catalog_photos WHERE catalog_id = %s",
+                (catalog_id, filename, original_name, caption, catalog_id),
             )
             return int(cur.lastrowid)
 
