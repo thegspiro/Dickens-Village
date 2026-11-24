@@ -65,11 +65,9 @@ def test_reorder_with_buttons_and_drag_and_cover_in_list(desk, tag, images):
     assert photo_ids(page) == [c, a, b]
 
     # drag the last photo in front of the first
-    page.locator(f'#photos .photo[data-photo-id="{b}"]').drag_to(
-        page.locator(f'#photos .photo[data-photo-id="{c}"]'), target_position={"x": 5, "y": 20})
-    page.wait_for_load_state()
-    expect(page.locator("#photos .photo").first).to_have_attribute("data-photo-id", str(b))
-    page.reload()
+    with page.expect_navigation():  # the page reloads itself once the new order is saved
+        page.locator(f'#photos .photo[data-photo-id="{b}"]').drag_to(
+            page.locator(f'#photos .photo[data-photo-id="{c}"]'), target_position={"x": 5, "y": 20})
     assert photo_ids(page) == [b, c, a]
 
     page.goto(f"/items?q={tag}")
@@ -110,4 +108,72 @@ def test_phone_gallery_is_uncropped_and_opens_the_viewer(phone, tag, images):
     expect(viewer.locator(".viewer-counter")).to_have_text("2 of 2")
     viewer.locator(".viewer-close").click()
     expect(viewer).to_be_hidden()
+    assert errors == []
+
+
+def _touch(cdp, kind, x=None, y=None):
+    points = [] if kind == "touchEnd" else [{"x": x, "y": y, "id": 1}]
+    cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": points})
+
+
+def _centre(page, photo_id):
+    box = page.locator(f'#photos .photo[data-photo-id="{photo_id}"] img').bounding_box()
+    return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+
+def test_touch_press_hold_and_drag_reorders(phone, tag, images):
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Touch order {tag}")
+    upload(page, item_id, images["house-red.jpg"], images["house-blue.png"], images["house-red.jpg"])
+    a, b, c = photo_ids(page)
+    page.locator("#photos .photos").scroll_into_view_if_needed()
+    cdp = ctx.new_cdp_session(page)
+
+    # a quick swipe across the photos scrolls; it doesn't move anything
+    x, y = _centre(page, c)
+    _touch(cdp, "touchStart", x, y)
+    for step in range(1, 6):
+        _touch(cdp, "touchMove", x - step * 30, y - step * 10)
+    _touch(cdp, "touchEnd")
+    page.wait_for_timeout(300)
+    assert photo_ids(page) == [a, b, c]
+    expect(page.locator("dialog.viewer")).to_be_hidden()
+
+    # press and hold the last photo, then drag it onto the left half of the first
+    x, y = _centre(page, c)
+    tx, ty = _centre(page, a)
+    _touch(cdp, "touchStart", x, y)
+    page.wait_for_timeout(600)
+    expect(page.locator(f'#photos .photo[data-photo-id="{c}"]')).to_have_class(re.compile("lifted"))
+    for step in range(1, 11):
+        _touch(cdp, "touchMove", x + (tx - 40 - x) * step / 10, y + (ty - y) * step / 10)
+        page.wait_for_timeout(20)
+    with page.expect_navigation():
+        _touch(cdp, "touchEnd")
+    expect(page.locator("dialog.viewer")).to_be_hidden()  # the drag didn't count as a tap
+    assert photo_ids(page) == [c, a, b]
+    expect(page.locator(f'#photos .photo[data-photo-id="{c}"] .cover-badge')).to_be_visible()
+
+    # a quick tap still opens the viewer
+    x, y = _centre(page, a)
+    _touch(cdp, "touchStart", x, y)
+    _touch(cdp, "touchEnd")
+    expect(page.locator("dialog.viewer")).to_be_visible()
+    assert errors == []
+
+
+def test_touch_hold_without_moving_changes_nothing(phone, tag, images):
+    ctx, page, errors = phone
+    item_id = add_piece(page, f"Touch hold {tag}")
+    upload(page, item_id, images["house-red.jpg"], images["house-blue.png"])
+    before = photo_ids(page)
+    cdp = ctx.new_cdp_session(page)
+    x, y = _centre(page, before[0])
+    _touch(cdp, "touchStart", x, y)
+    page.wait_for_timeout(700)
+    _touch(cdp, "touchEnd")
+    page.wait_for_timeout(500)
+    assert photo_ids(page) == before
+    expect(page.locator("dialog.viewer")).to_be_hidden()
+    expect(page.locator(".gallery-status")).to_have_text("")
     assert errors == []

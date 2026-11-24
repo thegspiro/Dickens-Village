@@ -132,15 +132,37 @@ function enableViewer(gallery) {
   });
 }
 
-/* Drag photos into a new order; the order is saved with the same form the Edit buttons use. */
+/*
+ * Drag photos into a new order; the order is saved with the same form the Edit
+ * buttons use. With a mouse or pen, photos drag directly. On a touch screen,
+ * press and hold a photo until it lifts, then drag: a quick swipe still
+ * scrolls the page and a quick tap still opens the viewer.
+ */
+var HOLD_MS = 400; // how long to press before a photo lifts
+var MOVE_TOLERANCE = 10; // px the finger may wander while holding
+var EDGE = 60; // px from the top or bottom of the screen where dragging scrolls
+
 function enableReorder(gallery) {
   var url = gallery.dataset.orderUrl;
   var token = document.querySelector('input[name="csrf_token"]');
   if (!url || !token) return;
-  var dragged = null;
   var status = el("p", { class: "hint gallery-status", role: "status", "aria-live": "polite" });
   gallery.parentNode.insertBefore(status, gallery.nextSibling);
+  gallery.classList.add("reorderable");
 
+  function order() {
+    return Array.prototype.map.call(gallery.querySelectorAll(".photo"), function (f) { return f.dataset.photoId; }).join(",");
+  }
+
+  /* Put `moving` before or after `target`, whichever side of its middle the point is on. */
+  function place(moving, target, x) {
+    if (!target || target === moving) return;
+    var box = target.getBoundingClientRect();
+    gallery.insertBefore(moving, x - box.left > box.width / 2 ? target.nextSibling : target);
+  }
+
+  // Mouse and pen: the browser's own drag and drop.
+  var dragged = null;
   Array.prototype.forEach.call(gallery.querySelectorAll(".photo"), function (fig) {
     fig.draggable = true;
     fig.addEventListener("dragstart", function (e) {
@@ -153,18 +175,93 @@ function enableReorder(gallery) {
     fig.addEventListener("dragover", function (e) {
       if (!dragged || dragged === fig) return;
       e.preventDefault();
-      var box = fig.getBoundingClientRect();
-      var after = (e.clientX - box.left) > box.width / 2;
-      gallery.insertBefore(dragged, after ? fig.nextSibling : fig);
+      place(dragged, fig, e.clientX);
     });
     fig.addEventListener("drop", function (e) { e.preventDefault(); save(); });
   });
 
+  // Touch: press and hold, then drag.
+  var touch = null; // { fig, id, x, y, timer, lifted, before }
+  var swallowClick = false;
+
+  function lift() {
+    touch.lifted = true;
+    touch.before = order();
+    touch.fig.classList.add("dragging", "lifted");
+    gallery.classList.add("is-dragging");
+    if (navigator.vibrate) navigator.vibrate(20);
+    status.textContent = "Drag the photo to its new place, then let go.";
+    autoScroll();
+  }
+
+  function finish(save_) {
+    if (!touch) return;
+    clearTimeout(touch.timer);
+    var wasLifted = touch.lifted;
+    var before = touch.before;
+    touch.fig.classList.remove("dragging", "lifted");
+    gallery.classList.remove("is-dragging");
+    touch = null;
+    if (!wasLifted) return;
+    swallowClick = true; // the tap that ends a drag must not open the viewer
+    setTimeout(function () { swallowClick = false; }, 400);
+    if (save_ && order() !== before) save();
+    else status.textContent = "";
+  }
+
+  function autoScroll() {
+    if (!touch || !touch.lifted) return;
+    var step = touch.y < EDGE ? -8 : touch.y > window.innerHeight - EDGE ? 8 : 0;
+    if (step) {
+      window.scrollBy(0, step);
+      var under = document.elementFromPoint(touch.x, touch.y);
+      place(touch.fig, under && under.closest(".photo"), touch.x);
+    }
+    requestAnimationFrame(autoScroll);
+  }
+
+  gallery.addEventListener("touchstart", function (e) {
+    if (touch || e.touches.length !== 1) { finish(false); return; }
+    var fig = e.target.closest(".photo");
+    if (!fig || !gallery.contains(fig) || e.target.closest("details, form, button, input")) return;
+    var t = e.touches[0];
+    touch = { fig: fig, id: t.identifier, x: t.clientX, y: t.clientY, lifted: false, before: null };
+    touch.timer = setTimeout(lift, HOLD_MS);
+  }, { passive: true });
+
+  // Not passive: once a photo has lifted, the page must not scroll under the finger.
+  gallery.addEventListener("touchmove", function (e) {
+    if (!touch) return;
+    var t = Array.prototype.find.call(e.changedTouches, function (c) { return c.identifier === touch.id; });
+    if (!t) return;
+    if (!touch.lifted) {
+      if (Math.abs(t.clientX - touch.x) > MOVE_TOLERANCE || Math.abs(t.clientY - touch.y) > MOVE_TOLERANCE) finish(false);
+      return; // a swipe: let the page scroll
+    }
+    e.preventDefault();
+    touch.x = t.clientX;
+    touch.y = t.clientY;
+    var under = document.elementFromPoint(t.clientX, t.clientY);
+    place(touch.fig, under && under.closest(".photo"), t.clientX);
+  }, { passive: false });
+
+  gallery.addEventListener("touchend", function (e) {
+    if (touch && touch.lifted) e.preventDefault();
+    finish(true);
+  });
+  gallery.addEventListener("touchcancel", function () { finish(false); });
+  // A long press would otherwise open the browser's image menu (Android) on top of the drag.
+  gallery.addEventListener("contextmenu", function (e) {
+    if (e.target.closest(".photo-link")) e.preventDefault();
+  });
+  gallery.addEventListener("click", function (e) {
+    if (swallowClick) { e.preventDefault(); e.stopImmediatePropagation(); swallowClick = false; }
+  }, true);
+
   function save() {
-    var ids = Array.prototype.map.call(gallery.querySelectorAll(".photo"), function (f) { return f.dataset.photoId; });
     var form = new FormData();
     form.append("csrf_token", token.value);
-    form.append("order", ids.join(","));
+    form.append("order", order());
     status.textContent = "Saving the new order…";
     fetch(url, { method: "POST", body: form, credentials: "same-origin", headers: { Accept: "application/json" } })
       .then(function (r) {
@@ -180,5 +277,5 @@ function enableReorder(gallery) {
 
 Array.prototype.forEach.call(document.querySelectorAll("[data-gallery]"), function (gallery) {
   enableViewer(gallery);
-  if (gallery.dataset.orderUrl && window.matchMedia("(pointer: fine)").matches) enableReorder(gallery);
+  if (gallery.dataset.orderUrl) enableReorder(gallery);
 });
