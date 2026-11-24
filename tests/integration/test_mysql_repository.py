@@ -676,3 +676,17 @@ def test_export_data_reads_everything_consistently(db_config, repo):
     # the connection is usable for writes afterwards (the read-only snapshot ended)
     repo.update_item(building, item(name="Renamed after export"))
     assert repo.get_item(building)["name"] == "Renamed after export"
+
+
+def test_catalog_for_matching(db_config, repo):
+    from app import catalog_match
+
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    rows = repo.catalog_for_matching()
+    assert rows and all(r["item_number"] for r in rows)
+    index = catalog_match.index_entries(rows)
+    assert [e["item_number"] for e in catalog_match.match("65161-2.jpg", index)[1]] == ["56.65161"]

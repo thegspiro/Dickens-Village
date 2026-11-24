@@ -625,6 +625,19 @@ class MySQLRepository:
         self._end_read()
         return rows
 
+    def catalog_for_matching(self) -> list[dict[str, Any]]:
+        """Every catalog entry with a number, for matching bulk-upload filenames: entries removed
+        from the CSVs only if a piece is linked to them."""
+        rows = self._all(
+            f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
+            "LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
+            "WHERE c.item_number IS NOT NULL "
+            "AND (c.listed = 1 OR EXISTS (SELECT 1 FROM items i WHERE i.catalog_id = c.id)) "
+            "ORDER BY c.parent_key IS NOT NULL, c.source_key"
+        )
+        self._end_read()
+        return rows
+
     def get_catalog_item(self, catalog_id: int) -> dict[str, Any] | None:
         row = self._one(
             f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "

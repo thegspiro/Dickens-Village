@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Add catalog photos by item number{% endblock %}
+{% block content %}
+<h1>Add catalog photos by item number</h1>
+<section class="card bulk" id="bulk" data-match-url="{{ url_for('main.catalog_bulk_match') }}"
+         data-max-mb="{{ max_mb }}" data-max-files="{{ max_files }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p>Name each photo after the piece's item number, then add them all at once. Each one is matched to its catalog entry and becomes one of its reference photos.</p>
+  <ul class="bulk-examples">
+    <li><code>56.65005.jpg</code>, <code>56-65005.jpg</code>, <code>5665005.jpg</code> or just <code>65005.jpg</code></li>
+    <li>Several photos of one piece: <code>56.65005-2.jpg</code>, <code>65005 (3).jpg</code>, <code>56.65005 back.jpg</code></li>
+  </ul>
+  <p class="muted">You'll see every match before anything is uploaded. Where several catalog entries share a number (a set and its pieces often do), pick the right one. Files that match nothing are left out.</p>
+  <div class="bulk-drop" id="bulk-drop">
+    <label class="button" for="bulk-files">Choose photos</label>
+    <input id="bulk-files" type="file" accept="image/jpeg,image/png,image/webp" multiple class="visually-hidden-file">
+    <span class="hint">or drop them here (up to {{ max_files }} at a time)</span>
+  </div>
+  <p class="bulk-status" id="bulk-status" role="status" aria-live="polite"></p>
+  <div class="table-wrap" id="bulk-table" hidden>
+    <table class="responsive bulk-rows">
+      <thead><tr><th>Upload</th><th>Photo</th><th>File</th><th>Catalog entry</th></tr></thead>
+      <tbody id="bulk-body"></tbody>
+    </table>
+  </div>
+  <div class="bulk-actions" hidden id="bulk-actions">
+    <button type="button" id="bulk-upload">Upload</button>
+    <button type="button" class="secondary" id="bulk-clear">Start over</button>
+  </div>
+  <div id="bulk-done" hidden></div>
+  <noscript><p class="flash flash-error">This page needs JavaScript. Without it, add photos from each catalog entry's own page.</p></noscript>
+</section>
+<p><a href="{{ url_for('main.catalog_browse') }}">Back to the catalog</a></p>
+{% endblock %}
+{% block scripts %}
+<script type="module" src="{{ url_for('static', filename='catalog-bulk.mjs') }}"></script>
+{% endblock %}

@@ -316,6 +316,11 @@ class FakeRepository:
                 hits.append((rank, number, row["id"], row))
         return [self._catalog_with_photos(h[3]) for h in sorted(hits, key=lambda h: h[:3])][:limit]
 
+    def catalog_for_matching(self) -> list[dict[str, Any]]:
+        owned = {i.get("catalog_id") for i in self.items.values()}
+        return [self._catalog_with_photos(r) for r in self.catalog.values()
+                if r["item_number"] and (r.get("listed", 1) or r["id"] in owned)]
+
     def _catalog_with_photos(self, row: dict[str, Any]) -> dict[str, Any]:
         ids = [p["id"] for p in self.list_catalog_photos(row["id"])]
         return {**row, "photo_id": ids[0] if ids else None, "photo_count": len(ids)}
