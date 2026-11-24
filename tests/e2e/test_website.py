@@ -197,9 +197,10 @@ def test_photos_upload_several_view_delete_and_reject_bad_files(desk, tag, image
     ctx, page, errors = desk
     item_id = add_piece(page, f"Photos {tag}")
     page.set_input_files("#photo", [str(images["house-red.jpg"]), str(images["house-blue.png"])])
-    expect(page.locator(".picker-status")).to_contain_text("2 photos ready")
-    page.click('#photos button:has-text("Upload")')
+    expect(page.locator(".upload-item")).to_have_count(2)
+    page.click('#photos button:has-text("Upload 2 photos")')
     expect(page.locator(".flash-success")).to_contain_text("Added 2 photos.")
+    assert "uploaded=" not in page.url  # the message isn't repeated on a reload
     thumbs = page.locator("#photos .photos img")
     expect(thumbs).to_have_count(2)
     # thumbnails really load (are images, served with a login)
@@ -209,10 +210,13 @@ def test_photos_upload_several_view_delete_and_reject_bad_files(desk, tag, image
     assert full.ok and full.headers["content-type"] == "image/jpeg"
 
     page.set_input_files("#photo", [str(images["not-a-photo.jpg"]), str(images["too-big.jpg"])])
-    page.click('#photos button:has-text("Upload")')
-    flashes = page.locator(".flash-error")
-    expect(flashes.filter(has_text="not-a-photo.jpg: That file is not a supported image.")).to_have_count(1)
-    expect(flashes.filter(has_text=f"too-big.jpg: That photo is larger than {MAX_UPLOAD_MB} MB.")).to_have_count(1)
+    big = page.locator(".upload-item", has_text="too-big.jpg")
+    expect(big).to_contain_text(f"Larger than {MAX_UPLOAD_MB} MB; it won't be uploaded.")  # caught before sending
+    page.click('#photos button:has-text("Upload 1 photo")')
+    expect(page.locator(".upload-item", has_text="not-a-photo.jpg")).to_contain_text(
+        "That file is not a supported image.")  # the server's own check
+    expect(page.locator("button.upload-reload")).to_have_text("Start over")
+    page.click("button.upload-reload")
     expect(page.locator("#photos .photos img")).to_have_count(2)
 
     page.locator("#photos .photo-tools summary").first.click()
@@ -224,7 +228,7 @@ def test_photos_upload_several_view_delete_and_reject_bad_files(desk, tag, image
     response = anon.request.get(photo_url, max_redirects=0)
     assert response.status == 302
     anon.close()
-    assert errors == []
+    assert [e for e in errors if "status of 400" not in e] == []  # the refused file's 400 is expected
 
 
 def test_edit_page_warns_when_piece_changed_elsewhere(make_context, tag):
