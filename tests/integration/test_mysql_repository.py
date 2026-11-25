@@ -707,3 +707,16 @@ def test_browse_catalog_filters(db_config, repo):
     assert len(page2) == 50 and page_total == missing_total
     assert not {r["id"] for r in page2} & {r["id"] for r in repo.browse_catalog(missing_photos=True, limit=50)[0]}
     assert repo.search_catalog(number)  # the lookup still works the same way
+
+
+def test_add_catalog_photo_with_a_caption(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    entry = repo.search_catalog("56.65161")[0]
+    with_caption = repo.add_catalog_photo(entry["id"], "c1" * 16 + ".jpg", "a.jpg", "Box art")
+    without = repo.add_catalog_photo(entry["id"], "c2" * 16 + ".jpg", None)
+    assert repo.get_catalog_photo(with_caption)["caption"] == "Box art"
+    assert repo.get_catalog_photo(without)["caption"] is None
