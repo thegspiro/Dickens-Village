@@ -819,12 +819,32 @@ def catalog_search() -> Any:
     return response
 
 
+CATALOG_PAGE_SIZE = 100
+
+
 @bp.get("/catalog")
 @login_required
 def catalog_browse() -> Any:
     query = " ".join(request.args.get("q", "").split())[:100]
-    results = repo().search_catalog(query, limit=100) if len(query) >= 2 else []
-    return render_template("catalog.html", query=query, results=results)
+    missing = request.args.get("missing") == "1"
+    owned = request.args.get("owned") == "1"
+    page = parse_positive_int(request.args.get("page")) or 1
+    filtered = missing or owned
+    results: list[dict[str, Any]] = []
+    total = 0
+    if filtered or len(query) >= 2:
+        results, total = repo().browse_catalog(query if len(query) >= 2 else "", missing_photos=missing,
+                                               owned_only=owned, limit=CATALOG_PAGE_SIZE,
+                                               offset=(page - 1) * CATALOG_PAGE_SIZE)
+    pages = max(math.ceil(total / CATALOG_PAGE_SIZE), 1)
+
+    def page_url(number: int) -> str:
+        args = {k: v for k, v in (("q", query), ("missing", "1" if missing else ""),
+                                  ("owned", "1" if owned else ""), ("page", str(number))) if v}
+        return f"{url_for('main.catalog_browse')}?{urlencode(args)}"
+
+    return render_template("catalog.html", query=query, results=results, total=total, missing=missing,
+                           owned=owned, filtered=filtered, page=page, pages=pages, page_url=page_url)
 
 
 @bp.get("/catalog/<int:catalog_id>")

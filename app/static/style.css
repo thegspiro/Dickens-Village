@@ -259,3 +259,10 @@ form.uploader.drop-target { border-color: var(--accent); background: #fbf6ef; }
 .upload-item.failed { border-color: var(--err-ink); }
 .upload-item.failed .upload-note { color: var(--err-ink); }
 .upload-item.failed .upload-bar { display: none; }
+
+
+/* Catalog page filters and "no photo yet" placeholder. */
+.catalog-filters { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin-top: .6rem; }
+.catalog-filters label.check { margin: 0; }
+.thumb-missing { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px;
+  border: 1px dashed var(--line); border-radius: 4px; color: var(--muted); font-size: 1.4rem; text-decoration: none; }

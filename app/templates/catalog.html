@@ -5,21 +5,33 @@
 <form method="get" action="{{ url_for('main.catalog_browse') }}" class="card">
   <label for="q">Item number or name</label>
   <input id="q" name="q" value="{{ query }}" maxlength="100" placeholder="e.g. 56.65005, 65005 or Fezziwig" autofocus>
-  <button type="submit">Search</button>
+  <div class="catalog-filters">
+    <label class="check"><input type="checkbox" name="missing" value="1"{% if missing %} checked{% endif %}> No photos yet</label>
+    <label class="check"><input type="checkbox" name="owned" value="1"{% if owned %} checked{% endif %}> Only pieces I own</label>
+  </div>
+  <button type="submit">{{ 'Search' if not filtered else 'Show' }}</button>
 </form>
 
-{% if query and query|length < 2 %}
+{% if query and query|length < 2 and not filtered %}
   <p class="card">Type at least two characters.</p>
-{% elif query %}
+{% elif query or filtered %}
   {% if results %}
+  <p class="muted catalog-count">
+    {{ total }} {{ 'entry' if total == 1 else 'entries' }}
+    {%- if missing %} without photos{% endif %}
+    {%- if owned %}{{ ' that' if missing else '' }} linked to pieces you own{% endif %}
+    {%- if query|length >= 2 %} matching “{{ query }}”{% endif %}.
+    {% if pages > 1 %}Page {{ page }} of {{ pages }}.{% endif %}
+  </p>
   <div class="table-wrap">
   <table class="responsive">
     <thead><tr><th>Photo</th><th>Name</th><th>Item #</th><th>List</th><th>Years</th><th class="num">Original retail</th></tr></thead>
     <tbody>
     {% for r in results %}
       <tr>
-        <td class="thumb-cell">{% if r.photo_id %}<img class="thumb" src="{{ url_for('main.catalog_photo_thumb', photo_id=r.photo_id) }}" alt="" loading="lazy">{% endif %}</td>
-        <td class="primary"><a href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}">{{ r.name }}</a>{% if r.parent_name %} <span class="muted">(part of “{{ r.parent_name }}”)</span>{% endif %}</td>
+        <td class="thumb-cell">{% if r.photo_id %}<img class="thumb" src="{{ url_for('main.catalog_photo_thumb', photo_id=r.photo_id) }}" alt="" loading="lazy">{% else %}<a class="thumb-missing" href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}#photos" aria-label="Add photos of {{ r.name }}">+</a>{% endif %}</td>
+        <td class="primary"><a href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}">{{ r.name }}</a>{% if r.parent_name %} <span class="muted">(part of “{{ r.parent_name }}”)</span>{% endif %}
+          {% if r.owned_count %}<span class="badge">You own {{ r.owned_count }}</span>{% endif %}</td>
         <td data-label="Item #">{{ r.item_number or '—' }}</td>
         <td data-label="List">{{ 'Lighted' if r.list_name == 'lighted' else 'Accessories' }}</td>
         <td data-label="Years">{{ r.year_issued or '?' }}–{{ 'Current' if r.is_current else (r.year_retired or '?') }}</td>
@@ -29,11 +41,20 @@
     </tbody>
   </table>
   </div>
-  {% if results|length == 100 %}<p class="muted">Showing the first 100 matches. Type more of the number or name to narrow it down.</p>{% endif %}
+  {% if pages > 1 %}
+  <nav class="pager" aria-label="Pages">
+    {% if page > 1 %}<a href="{{ page_url(page - 1) }}">← Previous</a>{% endif %}
+    <span>Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a href="{{ page_url(page + 1) }}">Next →</a>{% endif %}
+  </nav>
+  {% endif %}
+  {% elif missing and not query %}
+  <p class="card">Every {{ 'catalog entry for a piece you own' if owned else 'catalog entry' }} has at least one reference photo.</p>
   {% else %}
-  <p class="card">No catalog entries match “{{ query }}”.</p>
+  <p class="card">No catalog entries match{% if query %} “{{ query }}”{% endif %}{% if filtered %} with those filters{% endif %}.</p>
   {% endif %}
 {% else %}
-  <p class="muted">Search the 2025 Dickens' Village lists to add reference photos to a piece or start a new entry in your collection from it.</p>
+  <p class="muted">Search the 2025 Dickens' Village lists to add reference photos to a piece or start a new entry in your collection from it.
+  Tick <strong>No photos yet</strong> (and <strong>Only pieces I own</strong>) to list the entries that still need a reference photo.</p>
 {% endif %}
 {% endblock %}
