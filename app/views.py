@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import logging
 import math
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -361,10 +362,18 @@ def item_new() -> Any:
     )
 
 
+def _flash_uploaded() -> None:
+    """The upload script reloads with ?uploaded=N after sending N photos one by one."""
+    count = parse_positive_int(request.args.get("uploaded"))
+    if count is not None and count <= 1000:
+        flash(f"Added {count} photo{'' if count == 1 else 's'}.", "success")
+
+
 @bp.get("/items/<int:item_id>")
 @login_required
 def item_detail(item_id: int) -> Any:
     item = _item_or_404(item_id)
+    _flash_uploaded()
     r = repo()
     return render_template(
         "item_detail.html",
@@ -549,26 +558,33 @@ def link_delete(item_id: int, other_id: int) -> Any:
 MAX_PHOTOS_PER_UPLOAD = 20
 
 
-def _store_uploads(add_record: Callable[[str, str | None], int | None]) -> bool:
+@dataclass
+class _UploadResult:
+    added: int = 0
+    errors: list[tuple[str, str]] = field(default_factory=list)  # (file name, message)
+    parent_missing: bool = False
+
+
+def _store_uploads(add_record: Callable[[str, str | None], int | None]) -> _UploadResult:
     """Save every file in the "photo" field and record each with add_record.
 
-    Flashes one summary message plus one message per rejected file. Returns
-    False if add_record reported that the parent row no longer exists.
+    Stops early (parent_missing) if add_record reports that the piece or
+    catalog entry no longer exists.
     """
+    result = _UploadResult()
     uploads = [f for f in request.files.getlist("photo") if f and f.filename]
     if not uploads:
-        flash("Choose one or more photos to upload.", "error")
-        return True
+        result.errors.append(("", "Choose one or more photos to upload."))
+        return result
     if len(uploads) > MAX_PHOTOS_PER_UPLOAD:
-        flash(f"Upload at most {MAX_PHOTOS_PER_UPLOAD} photos at a time.", "error")
-        return True
-    added = 0
+        result.errors.append(("", f"Upload at most {MAX_PHOTOS_PER_UPLOAD} photos at a time."))
+        return result
     for upload in uploads:
         original = photos.clean_original_name(upload.filename)
         try:
             filename = photos.save_photo(upload.stream, _upload_dir(), _max_photo_bytes())
         except photos.PhotoError as exc:
-            flash(f"{original or 'A file'}: {exc}", "error")
+            result.errors.append((original or "A file", str(exc)))
             continue
         try:
             record_id = add_record(filename, original)
@@ -577,11 +593,25 @@ def _store_uploads(add_record: Callable[[str, str | None], int | None]) -> bool:
             raise
         if record_id is None:
             photos.delete_photo_file(_upload_dir(), filename)
-            return False
-        added += 1
-    if added:
-        flash(f"Added {added} photo{'' if added == 1 else 's'}.", "success")
-    return True
+            result.parent_missing = True
+            return result
+        result.added += 1
+    return result
+
+
+def _uploaded(result: _UploadResult, back: str) -> Any:
+    """Answer an upload: JSON for the upload script, otherwise flash messages and a redirect."""
+    if result.parent_missing:
+        abort(404)
+    if _wants_json():
+        body = {"added": result.added,
+                "errors": [{"name": name, "message": message} for name, message in result.errors]}
+        return jsonify(body), (200 if result.added or not result.errors else 400)
+    for name, message in result.errors:
+        flash(f"{name}: {message}" if name else message, "error")
+    if result.added:
+        flash(f"Added {result.added} photo{'' if result.added == 1 else 's'}.", "success")
+    return redirect(back)
 
 
 def _send_photo(filename: str, thumb: bool) -> Any:
@@ -600,9 +630,8 @@ def _send_photo(filename: str, thumb: bool) -> Any:
 def photo_add(item_id: int) -> Any:
     check_csrf()
     _item_or_404(item_id)
-    if not _store_uploads(lambda filename, original: repo().add_photo(item_id, filename, original)):
-        abort(404)
-    return redirect(url_for("main.item_detail", item_id=item_id) + "#photos")
+    result = _store_uploads(lambda filename, original: repo().add_photo(item_id, filename, original))
+    return _uploaded(result, url_for("main.item_detail", item_id=item_id) + "#photos")
 
 
 @bp.app_template_global()
@@ -825,6 +854,7 @@ def catalog_entry(catalog_id: int) -> Any:
     entry = r.get_catalog_item(catalog_id)
     if entry is None:
         abort(404)
+    _flash_uploaded()
     return render_template(
         "catalog_entry.html",
         entry=entry,
@@ -840,9 +870,8 @@ def catalog_photo_add(catalog_id: int) -> Any:
     check_csrf()
     if repo().get_catalog_item(catalog_id) is None:
         abort(404)
-    if not _store_uploads(lambda filename, original: repo().add_catalog_photo(catalog_id, filename, original)):
-        abort(404)
-    return redirect(url_for("main.catalog_entry", catalog_id=catalog_id) + "#photos")
+    result = _store_uploads(lambda filename, original: repo().add_catalog_photo(catalog_id, filename, original))
+    return _uploaded(result, url_for("main.catalog_entry", catalog_id=catalog_id) + "#photos")
 
 
 @bp.post("/catalog/<int:catalog_id>/photos/order")

@@ -55,8 +55,8 @@ def test_installable_pwa_and_phone_layout(phone, tag, images):
     expect(page.locator('label:has-text("Take a photo")')).to_be_visible()
     page.set_input_files("#photo-camera", str(images["house-red.jpg"]))
     page.set_input_files("#photo", str(images["house-blue.png"]))
-    expect(page.locator(".picker-status")).to_contain_text("2 photos ready")
-    page.click('#photos button:has-text("Upload")')
+    expect(page.locator(".upload-item")).to_have_count(2)  # camera and library photos queue together
+    page.click('#photos button:has-text("Upload 2 photos")')
     expect(page.locator(".flash-success")).to_contain_text("Added 2 photos.")
     assert errors == []
 
