@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Catalog{% endblock %}
 {% block content %}
-<h1>Catalog</h1>
+<div class="title-row">
+  <h1>Catalog</h1>
+  <div class="actions"><a class="button" href="{{ url_for('main.catalog_bulk') }}">Add photos by item number</a></div>
+</div>
 <form method="get" action="{{ url_for('main.catalog_browse') }}" class="card">
   <label for="q">Item number or name</label>
   <input id="q" name="q" value="{{ query }}" maxlength="100" placeholder="e.g. 56.65005, 65005 or Fezziwig" autofocus>

@@ -26,7 +26,7 @@ from flask import (
     url_for,
 )
 
-from . import export, photos, scans
+from . import catalog_match, export, photos, scans
 from .auth import (
     check_csrf,
     current_user,
@@ -882,6 +882,33 @@ def catalog_browse() -> Any:
 
     return render_template("catalog.html", query=query, results=results, total=total, missing=missing,
                            owned=owned, filtered=filtered, page=page, pages=pages, page_url=page_url)
+
+
+MAX_BULK_FILES = 500
+
+
+@bp.get("/catalog/bulk")
+@login_required
+def catalog_bulk() -> Any:
+    """Add reference photos to many catalog entries at once, matched by item number."""
+    return render_template("catalog_bulk.html", max_mb=current_app.config["DICKENS"].max_upload_mb,
+                           max_files=MAX_BULK_FILES)
+
+
+@bp.post("/catalog/bulk/match")
+@login_required
+def catalog_bulk_match() -> Any:
+    """Which catalog entries do these filenames name? Nothing is uploaded here."""
+    check_csrf()
+    names = [n[:255] for n in request.form.getlist("name")][:MAX_BULK_FILES]
+    index = catalog_match.index_entries(repo().catalog_for_matching())
+    matches = []
+    for name in names:
+        key, entries = catalog_match.match(name, index)
+        matches.append({"name": name, "key": key, "entries": [_catalog_json(e) for e in entries]})
+    response = jsonify({"matches": matches})
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @bp.get("/catalog/<int:catalog_id>")

@@ -720,3 +720,17 @@ def test_add_catalog_photo_with_a_caption(db_config, repo):
     without = repo.add_catalog_photo(entry["id"], "c2" * 16 + ".jpg", None)
     assert repo.get_catalog_photo(with_caption)["caption"] == "Box art"
     assert repo.get_catalog_photo(without)["caption"] is None
+
+
+def test_catalog_for_matching(db_config, repo):
+    from app import catalog_match
+
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    rows = repo.catalog_for_matching()
+    assert rows and all(r["item_number"] for r in rows)
+    index = catalog_match.index_entries(rows)
+    assert [e["item_number"] for e in catalog_match.match("65161-2.jpg", index)[1]] == ["56.65161"]
