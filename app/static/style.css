@@ -115,6 +115,11 @@ button.small { padding: .3rem .6rem; font-size: .8rem; margin: 0; min-height: 0;
 button.secondary { background: #ece6dc; color: var(--ink); }
 .photos .photo[draggable="true"] { cursor: grab; }
 .photos .photo.dragging { opacity: .45; }
+/* Touch reordering: no "save image" callout on a long press; the lifted photo stands out. */
+.photos.reorderable img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.photos .photo.lifted { opacity: .85; transform: scale(1.05); box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+  border-radius: 6px; position: relative; z-index: 2; }
+.photos.is-dragging .photo:not(.lifted) { transition: transform .15s; }
 .cover-thumb { width: 44px; height: 33px; object-fit: contain; background: #f3efe8; border: 1px solid var(--line);
   border-radius: 4px; vertical-align: middle; margin-right: .5rem; }
 @media (max-width: 520px) { .photos { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; } }
