@@ -47,8 +47,8 @@
   <section class="card" id="photos">
     <h2>Photos</h2>
     {% if photos %}
-    <p class="hint">Tap a photo to see it full size.{% if photos|length > 1 %} The first one is the cover; drag photos (or use Edit) to change the order.{% endif %}</p>
-    {{ gallery(photos, 'item', item.id, 'Photo of ' ~ item.name) }}
+    <p class="hint">Tap a photo to see it full size.{% if photos|length > 1 %} The first one is the cover. To change the order, drag photos (on a phone, press and hold one first) or use Edit.{% endif %}</p>
+    {{ gallery(photos, 'item', item.id, 'Photo of ' ~ item.name, catalog_id=item.catalog_id if catalog else None) }}
     {% else %}<p class="muted">No photos of your piece yet.</p>{% endif %}
     <form method="post" action="{{ url_for('main.photo_add', item_id=item.id) }}" enctype="multipart/form-data" data-uploader data-max-mb="{{ config.DICKENS.max_upload_mb }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -9,10 +9,12 @@ from user input.
 
 from __future__ import annotations
 
+import filecmp
 import logging
 import os
 import re
 import secrets
+import shutil
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -182,6 +184,57 @@ def regenerate_thumbnail(upload_dir: str, filename: str) -> None:
     finally:
         thumb.close()
     log.info("Regenerated thumbnail for %s", filename)
+
+
+def _copy_file(source: Path, target: Path) -> None:
+    """Copy to a temp file next to the target, then rename, so a crash never leaves half a file."""
+    fd, tmp_path = tempfile.mkstemp(dir=target.parent, prefix=".upload-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out, source.open("rb") as src:
+            shutil.copyfileobj(src, out, length=1024 * 1024)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+def copy_photo(upload_dir: str, filename: str) -> str:
+    """Copy a stored photo (and its thumbnail, if it has one) under a new random name.
+
+    The copy is independent: deleting either photo later leaves the other.
+    Returns the new filename. Raises PhotoError if the photo can't be read.
+    """
+    if not FILENAME_RE.match(filename):
+        raise PhotoError("Not a stored photo filename.")
+    directory = Path(upload_dir)
+    new_name = f"{secrets.token_hex(16)}.jpg"
+    try:
+        _copy_file(directory / filename, directory / new_name)
+    except FileNotFoundError:
+        raise PhotoError("The photo file is missing on the server.") from None
+    except OSError:
+        log.exception("Could not copy photo %s", filename)
+        raise PhotoError("The photo couldn't be copied.") from None
+    thumb = directory / thumb_name(filename)
+    if thumb.is_file():
+        try:
+            _copy_file(thumb, directory / thumb_name(new_name))
+        except OSError:  # the copy still works; it falls back to the full-size photo
+            log.warning("Could not copy thumbnail of %s", filename, exc_info=True)
+    log.info("Copied photo %s to %s", filename, new_name)
+    return new_name
+
+def same_content(upload_dir: str, a: str, b: str) -> bool:
+    """True when two stored photos are byte-for-byte identical (cheap size check first)."""
+    directory = Path(upload_dir)
+    try:
+        if (directory / a).stat().st_size != (directory / b).stat().st_size:
+            return False
+        return filecmp.cmp(directory / a, directory / b, shallow=False)
+    except OSError:
+        return False
 
 
 def _unlink_quietly(path: Path) -> None:

@@ -368,13 +368,14 @@ class FakeRepository:
     def get_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:
         return self.catalog_photos.get(photo_id)
 
-    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None) -> int | None:
+    def add_catalog_photo(self, catalog_id: int, filename: str, original_name: str | None,
+                          caption: str | None = None) -> int | None:
         if catalog_id not in self.catalog:
             return None
         new_id = next(self._ids)
         self.catalog_photos[new_id] = {"id": new_id, "catalog_id": catalog_id, "filename": filename,
                                        "original_name": original_name,
-                                       "sort_order": len(self.list_catalog_photos(catalog_id)), "caption": None}
+                                       "sort_order": len(self.list_catalog_photos(catalog_id)), "caption": caption}
         return new_id
 
     def delete_catalog_photo(self, photo_id: int) -> dict[str, Any] | None:

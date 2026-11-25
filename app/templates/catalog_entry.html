@@ -46,7 +46,7 @@ It is kept because pieces or photos may belong to it.</p>
   <h2>Reference photos <span class="muted">({{ photos|length }})</span></h2>
   <p class="muted">Photos here show in the catalog lookup and on every piece linked to this entry. They are stored only on your server.</p>
   {% if photos %}
-  <p class="hint">Tap a photo to see it full size.{% if photos|length > 1 %} The first one is the cover, shown in the lookup; drag photos (or use Edit) to change the order.{% endif %}</p>
+  <p class="hint">Tap a photo to see it full size.{% if photos|length > 1 %} The first one is the cover, shown in the lookup. To change the order, drag photos (on a phone, press and hold one first) or use Edit.{% endif %}</p>
   {{ gallery(photos, 'catalog', entry.id, 'Photo of ' ~ entry.name) }}
   {% endif %}
   <form method="post" action="{{ url_for('main.catalog_photo_add', catalog_id=entry.id) }}" enctype="multipart/form-data" data-uploader data-max-mb="{{ config.DICKENS.max_upload_mb }}">

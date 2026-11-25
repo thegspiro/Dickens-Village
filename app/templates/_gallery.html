@@ -5,7 +5,7 @@
   without JavaScript. static/gallery.mjs adds the full-screen viewer and
   drag-to-reorder on top.
 #}
-{% macro gallery(photos, kind, owner_id, alt, manage=True) -%}
+{% macro gallery(photos, kind, owner_id, alt, manage=True, catalog_id=None) -%}
 {% set full_ep = 'main.photo_file' if kind == 'item' else 'main.catalog_photo_file' %}
 {% set thumb_ep = 'main.photo_thumb' if kind == 'item' else 'main.catalog_photo_thumb' %}
 {% set delete_ep = 'main.photo_delete' if kind == 'item' else 'main.catalog_photo_delete' %}
@@ -43,6 +43,12 @@
         {% endif %}
         {% endfor %}
       </div>
+      {% endif %}
+      {% if kind == 'item' and catalog_id %}
+      <form method="post" action="{{ url_for('main.photo_to_catalog', photo_id=p.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="small secondary">Use as catalog photo</button>
+      </form>
       {% endif %}
       <form method="post" action="{{ url_for(delete_ep, photo_id=p.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -694,6 +694,43 @@ def photo_caption(photo_id: int) -> Any:
     return _captioned(row, error, lambda r: url_for("main.item_detail", item_id=r["item_id"]) + "#photos")
 
 
+@bp.post("/photos/<int:photo_id>/to-catalog")
+@login_required
+def photo_to_catalog(photo_id: int) -> Any:
+    """Copy one of a piece's photos to the reference photos of its catalog entry."""
+    check_csrf()
+    r = repo()
+    photo = r.get_photo(photo_id)
+    if photo is None:
+        abort(404)
+    item = _item_or_404(photo["item_id"])
+    back = url_for("main.item_detail", item_id=item["id"]) + "#photos"
+    catalog_id = item.get("catalog_id")
+    if not catalog_id or r.get_catalog_item(catalog_id) is None:
+        flash("Link this piece to a catalog entry first (Edit → Look up in catalog).", "error")
+        return redirect(back)
+    if any(photos.same_content(_upload_dir(), photo["filename"], existing["filename"])
+           for existing in r.list_catalog_photos(catalog_id)):
+        flash("That photo is already one of the catalog entry's reference photos.", "error")
+        return redirect(back)
+    try:
+        filename = photos.copy_photo(_upload_dir(), photo["filename"])
+    except photos.PhotoError as exc:
+        flash(str(exc), "error")
+        return redirect(back)
+    try:
+        new_id = r.add_catalog_photo(catalog_id, filename, photo.get("original_name"), photo.get("caption"))
+    except Exception:
+        photos.delete_photo_file(_upload_dir(), filename)
+        raise
+    if new_id is None:
+        photos.delete_photo_file(_upload_dir(), filename)
+        abort(404)
+    log.info("Copied photo id=%s of item id=%s to catalog id=%s", photo_id, item["id"], catalog_id)
+    flash("Added to the catalog entry's reference photos.", "success")
+    return redirect(back)
+
+
 @bp.get("/photos/<int:photo_id>")
 @login_required
 def photo_file(photo_id: int) -> Any:
