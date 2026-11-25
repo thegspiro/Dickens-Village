@@ -678,6 +678,37 @@ def test_export_data_reads_everything_consistently(db_config, repo):
     assert repo.get_item(building)["name"] == "Renamed after export"
 
 
+def test_browse_catalog_filters(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    all_rows, total = repo.browse_catalog(limit=1000)
+    with_photo = all_rows[0]["id"]
+    linked = all_rows[1]["id"]
+    repo.add_catalog_photo(with_photo, "a1" * 16 + ".jpg", None)
+    data = item(name="Browse linked")
+    data["catalog_id"] = linked
+    repo.create_item(data)
+    repo.create_item(data)
+
+    missing, missing_total = repo.browse_catalog(missing_photos=True, limit=1000)
+    assert with_photo not in {r["id"] for r in missing} and linked in {r["id"] for r in missing}
+    assert missing_total == total - 1 - sum(1 for r in all_rows if r["photo_id"] and r["id"] != with_photo)
+    owned, owned_total = repo.browse_catalog(owned_only=True)
+    assert [r["id"] for r in owned] == [linked] and owned_total == 1 and owned[0]["owned_count"] == 2
+    both, _ = repo.browse_catalog(missing_photos=True, owned_only=True)
+    assert [r["id"] for r in both] == [linked]
+    number = all_rows[1]["item_number"]
+    found, found_total = repo.browse_catalog(number, owned_only=True)
+    assert [r["id"] for r in found] == [linked] and found_total == 1
+    page2, page_total = repo.browse_catalog(missing_photos=True, limit=50, offset=50)
+    assert len(page2) == 50 and page_total == missing_total
+    assert not {r["id"] for r in page2} & {r["id"] for r in repo.browse_catalog(missing_photos=True, limit=50)[0]}
+    assert repo.search_catalog(number)  # the lookup still works the same way
+
+
 def test_catalog_for_matching(db_config, repo):
     from app import catalog_match
 

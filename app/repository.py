@@ -593,12 +593,10 @@ class MySQLRepository:
 
     # -- reference catalog ----------------------------------------------------
 
-    def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
-        """Find catalog entries by item number (ranked first) or name; entries
-        removed from the CSVs (listed = 0) are left out."""
-        query = " ".join(query.split())[:100]
-        if len(query) < 2:
-            return []
+    @staticmethod
+    def _catalog_match(query: str) -> tuple[str, list[Any], str, list[Any]]:
+        """WHERE fragment and ORDER BY fragment (with their parameters) that find
+        catalog entries by item number (ranked first) or name."""
         like = f"%{_like_escape(query)}%"
         prefix = f"{_like_escape(query)}%"
         digits = "".join(ch for ch in query if ch.isdigit())
@@ -608,22 +606,72 @@ class MySQLRepository:
             # "5665005" or "56-65005" should still find 56.65005
             where.append("REPLACE(c.item_number, '.', '') LIKE %s")
             params.append(f"%{digits}%")
-        sql = (
-            f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
-            "LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
-            f"WHERE c.listed = 1 AND ({' OR '.join(where)}) "
-            "ORDER BY CASE "
+        order = (
+            "CASE "
             "  WHEN c.item_number = %s THEN 0 "
             "  WHEN c.item_number LIKE %s THEN 1 "
             "  WHEN c.item_number LIKE %s THEN 2 "
             "  WHEN c.name LIKE %s THEN 3 "
             "  ELSE 4 END, "
-            "c.parent_key IS NOT NULL, c.item_number, c.source_key "
+        )
+        return f"({' OR '.join(where)})", params, order, [query, prefix, like, prefix]
+
+    def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
+        """Find catalog entries by item number (ranked first) or name; entries
+        removed from the CSVs (listed = 0) are left out."""
+        query = " ".join(query.split())[:100]
+        if len(query) < 2:
+            return []
+        match, params, order, order_params = self._catalog_match(query)
+        sql = (
+            f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
+            "LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
+            f"WHERE c.listed = 1 AND {match} "
+            f"ORDER BY {order}c.parent_key IS NOT NULL, c.item_number, c.source_key "
             "LIMIT %s"
         )
-        rows = self._all(sql, [*params, query, prefix, like, prefix, limit])
+        rows = self._all(sql, [*params, *order_params, limit])
         self._end_read()
         return rows
+
+    def browse_catalog(self, query: str = "", missing_photos: bool = False, owned_only: bool = False,
+                       limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        """The Catalog page: optional search, optionally only entries with no
+        reference photo and/or only entries a piece in the collection is linked
+        to. Returns (rows, total). Each row also has owned_count.
+
+        Entries removed from the CSVs are left out, as in the lookup. With
+        either filter on, those a piece is linked to are included: they still
+        need photos for that piece.
+        """
+        query = " ".join(query.split())[:100]
+        if missing_photos or owned_only:
+            where = ["(c.listed = 1 OR EXISTS (SELECT 1 FROM items i WHERE i.catalog_id = c.id))"]
+        else:
+            where = ["c.listed = 1"]
+        params: list[Any] = []
+        order, order_params = "", []
+        if query:
+            match, match_params, order, order_params = self._catalog_match(query)
+            where.append(match)
+            params += match_params
+        if missing_photos:
+            where.append("NOT EXISTS (SELECT 1 FROM catalog_photos cp WHERE cp.catalog_id = c.id)")
+        if owned_only:
+            where.append("EXISTS (SELECT 1 FROM items i WHERE i.catalog_id = c.id)")
+        where_sql = " AND ".join(where)
+        total = self._one(f"SELECT COUNT(*) AS n FROM catalog_items c WHERE {where_sql}", params)
+        rows = self._all(
+            f"SELECT {_CATALOG_FIELDS}, "
+            "(SELECT COUNT(*) FROM items i WHERE i.catalog_id = c.id) AS owned_count "
+            "FROM catalog_items c LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
+            f"WHERE {where_sql} "
+            f"ORDER BY {order}c.parent_key IS NOT NULL, c.item_number IS NULL, c.item_number, c.source_key "
+            "LIMIT %s OFFSET %s",
+            [*params, *order_params, limit, offset],
+        )
+        self._end_read()
+        return rows, int(total["n"]) if total else 0
 
     def catalog_for_matching(self) -> list[dict[str, Any]]:
         """Every catalog entry with a number, for matching bulk-upload filenames: entries removed

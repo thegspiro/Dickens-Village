@@ -98,3 +98,30 @@ def test_catalog_pages_photos_and_add_to_collection(desk, tag, images):
     page.fill("#catalog-lookup", "56.65080")
     expect(page.locator("#catalog-results img.combo-thumb").first).to_be_visible()
     assert errors == []
+
+
+def test_find_owned_entries_that_need_photos(desk, tag, images):
+    ctx, page, errors = desk
+    page.goto("/items/new")
+    page.fill('#catalog-lookup', "56.65161")
+    page.locator("#catalog-results li").first.click()
+    page.fill("#name", f"Needs photo {tag}")
+    page.click('button:has-text("Add piece")')
+    page.wait_for_url(re.compile(r"/items/\d+$"))
+
+    page.goto("/catalog")
+    page.check('input[name="missing"]')
+    page.check('input[name="owned"]')
+    page.click('form.card button[type="submit"]')
+    expect(page).to_have_url(re.compile(r"missing=1.*owned=1"))
+    row = page.locator("tbody tr", has_text="56.65161")
+    expect(row).to_contain_text("You own")
+    row.locator("a.thumb-missing").click()
+    expect(page).to_have_url(re.compile(r"/catalog/\d+#photos$"))
+    page.set_input_files("#photo", str(images["house-red.jpg"]))
+    page.click('#photos button:has-text("Upload")')
+    expect(page.locator(".flash-success")).to_contain_text("Added 1 photo.")
+
+    page.goto("/catalog?missing=1&owned=1")
+    expect(page.locator("tbody tr", has_text="56.65161")).to_have_count(0)
+    assert errors == []

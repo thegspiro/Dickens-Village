@@ -260,6 +260,13 @@ form.uploader.drop-target { border-color: var(--accent); background: #fbf6ef; }
 .upload-item.failed .upload-note { color: var(--err-ink); }
 .upload-item.failed .upload-bar { display: none; }
 
+
+/* Catalog page filters and "no photo yet" placeholder. */
+.catalog-filters { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin-top: .6rem; }
+.catalog-filters label.check { margin: 0; }
+.thumb-missing { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px;
+  border: 1px dashed var(--line); border-radius: 4px; color: var(--muted); font-size: 1.4rem; text-decoration: none; }
+
 /* Bulk catalog photos (static/catalog-bulk.mjs). */
 .bulk-examples { margin: .25rem 0 .75rem; padding-left: 1.2rem; }
 .bulk-drop { border: 2px dashed var(--line); border-radius: 8px; padding: 1rem; display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; }
