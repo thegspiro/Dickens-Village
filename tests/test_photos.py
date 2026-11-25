@@ -127,3 +127,15 @@ def test_uploads_on_several_threads_at_once(tmp_path, monkeypatch):
     assert all("megapixels" in str(results[n]) for n in range(0, 24, 4))
     assert len({results[n] for n in range(24) if n % 4}) == 18  # distinct stored files
     assert warnings.filters == filters_before
+
+
+def test_regenerate_thumbnail_refuses_unexpected_names(tmp_path):
+    with pytest.raises(photos.PhotoError):
+        photos.regenerate_thumbnail(str(tmp_path), "../../etc/passwd")
+    with pytest.raises(photos.PhotoError, match="missing"):
+        photos.regenerate_thumbnail(str(tmp_path), "a" * 32 + ".jpg")
+
+
+def test_new_uploads_already_have_current_thumbnails(tmp_path):
+    name = photos.save_photo(png_bytes((1600, 1200), mode="RGB"), str(tmp_path))
+    assert photos.thumbnail_is_current(str(tmp_path), name)

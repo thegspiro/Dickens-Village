@@ -113,3 +113,74 @@ def test_needs_an_existing_upload_dir(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "nope"))
     assert uploads.main(["status"]) == 1
     assert "Upload folder not found" in capsys.readouterr().err
+
+
+# -- thumbs: rebuild thumbnails smaller than the gallery uses ------------------------
+
+def _store(folder, name, size, thumb_edge=None):
+    """A stored photo as the app writes it, with a thumbnail of thumb_edge (None: no thumbnail)."""
+    from PIL import Image
+
+    from app import photos
+
+    image = Image.new("RGB", size, (120, 80, 60))
+    image.save(folder / f"{name}.jpg", format="JPEG")
+    if thumb_edge:
+        thumb = image.copy()
+        thumb.thumbnail((thumb_edge, thumb_edge))
+        thumb.save(folder / photos.thumb_name(f"{name}.jpg"), format="JPEG")
+
+
+def _thumb_size(folder, name):
+    from PIL import Image
+
+    from app import photos
+
+    with Image.open(folder / photos.thumb_name(f"{name}.jpg")) as img:
+        return img.size
+
+
+@pytest.fixture
+def photo_folder(tmp_path):
+    _store(tmp_path, "1" * 32, (2000, 1500), thumb_edge=320)   # old small thumbnail
+    _store(tmp_path, "2" * 32, (1200, 1600), thumb_edge=None)  # from before thumbnails existed
+    _store(tmp_path, "3" * 32, (2000, 1000), thumb_edge=480)   # already current
+    _store(tmp_path, "4" * 32, (300, 200), thumb_edge=320)     # photo smaller than 480: thumbnail is full size
+    (tmp_path / ("5" * 32 + ".jpg")).write_bytes(b"not a jpeg")  # damaged
+    (tmp_path / "holiday.jpg").write_bytes(b"x")                 # not ours
+    return tmp_path
+
+
+def test_finds_only_thumbnails_that_are_too_small_or_missing(photo_folder):
+    assert uploads.stale_thumbnails(photo_folder) == ["1" * 32 + ".jpg", "2" * 32 + ".jpg", "5" * 32 + ".jpg"]
+
+
+def test_report_changes_nothing(photo_folder, capsys):
+    before = {p.name: p.read_bytes() for p in photo_folder.iterdir()}
+    assert uploads.thumbs_command(photo_folder, apply=False) == 0
+    assert "3 photo(s) have a thumbnail smaller than 480 px" in capsys.readouterr().out
+    assert {p.name: p.read_bytes() for p in photo_folder.iterdir()} == before
+
+
+def test_rebuild_makes_480px_thumbnails_and_reports_damaged_photos(photo_folder, capsys):
+    untouched = (photo_folder / ("3" * 32 + ".thumb.jpg")).read_bytes()
+    assert uploads.thumbs_command(photo_folder, apply=True) == 1  # one photo couldn't be read
+    out = capsys.readouterr().out
+    assert "Rebuilt 2 thumbnail(s); 1 could not be rebuilt" in out and "5" * 32 in out
+    assert _thumb_size(photo_folder, "1" * 32) == (480, 360)
+    assert _thumb_size(photo_folder, "2" * 32) == (360, 480)
+    assert (photo_folder / ("3" * 32 + ".thumb.jpg")).read_bytes() == untouched
+    assert _thumb_size(photo_folder, "4" * 32) == (300, 200)
+    assert not list(photo_folder.glob(".upload-*.tmp"))  # written atomically, nothing left over
+    assert uploads.stale_thumbnails(photo_folder) == ["5" * 32 + ".jpg"]  # running again only retries the damaged one
+
+
+def test_thumbs_needs_no_database(monkeypatch, photo_folder, capsys):
+    for key in ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("UPLOAD_DIR", str(photo_folder))
+    (photo_folder / ("5" * 32 + ".jpg")).unlink()
+    assert uploads.main(["thumbs", "--yes"]) == 0
+    assert "Rebuilt 2 thumbnail(s)" in capsys.readouterr().out
+    assert uploads.main(["thumbs"]) == 0
+    assert "0 photo(s)" in capsys.readouterr().out

@@ -316,6 +316,29 @@ class FakeRepository:
                 hits.append((rank, number, row["id"], row))
         return [self._catalog_with_photos(h[3]) for h in sorted(hits, key=lambda h: h[:3])][:limit]
 
+    def browse_catalog(self, query: str = "", missing_photos: bool = False, owned_only: bool = False,
+                       limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        owned = {}
+        for item in self.items.values():
+            if item.get("catalog_id"):
+                owned[item["catalog_id"]] = owned.get(item["catalog_id"], 0) + 1
+        if query:
+            listed_hits = {r["id"] for r in self.search_catalog(query, limit=10_000)}
+            q = query.strip().lower()
+            rows = [r for r in self.catalog.values()
+                    if r["id"] in listed_hits or (not r.get("listed", 1) and r["id"] in owned
+                                                  and (q in (r["item_number"] or "").lower() or q in r["name"].lower()))]
+        else:
+            rows = list(self.catalog.values())
+        rows = [r for r in rows if r.get("listed", 1) or ((missing_photos or owned_only) and r["id"] in owned)]
+        if missing_photos:
+            rows = [r for r in rows if not self.list_catalog_photos(r["id"])]
+        if owned_only:
+            rows = [r for r in rows if r["id"] in owned]
+        rows.sort(key=lambda r: (r.get("parent_name") is not None, r["item_number"] is None, r["item_number"] or "", r["id"]))
+        page = [{**self._catalog_with_photos(r), "owned_count": owned.get(r["id"], 0)} for r in rows[offset:offset + limit]]
+        return page, len(rows)
+
     def _catalog_with_photos(self, row: dict[str, Any]) -> dict[str, Any]:
         ids = [p["id"] for p in self.list_catalog_photos(row["id"])]
         return {**row, "photo_id": ids[0] if ids else None, "photo_count": len(ids)}

@@ -9,11 +9,11 @@ from user input.
 
 from __future__ import annotations
 
+import filecmp
 import logging
 import os
 import re
 import secrets
-import filecmp
 import shutil
 import tempfile
 from pathlib import Path
@@ -35,7 +35,7 @@ MAX_EDGE = 2000
 # our checks below are stricter for everything decoded at full size.
 Image.MAX_IMAGE_PIXELS = MAX_JPEG_PIXELS
 JPEG_QUALITY = 85
-THUMB_EDGE = 480  # sharp at gallery size on 2x screens; photos stored before this have 320px thumbnails
+THUMB_EDGE = 480  # sharp at gallery size on 2x screens; older 320px ones: python -m app.uploads thumbs --yes
 FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.jpg$")
 
 
@@ -144,6 +144,48 @@ def save_photo(stream: IO[bytes], upload_dir: str, max_bytes: int | None = None)
     return filename
 
 
+def thumbnail_is_current(upload_dir: str, filename: str) -> bool:
+    """True when a stored photo's thumbnail exists and is as large as THUMB_EDGE allows."""
+    directory = Path(upload_dir)
+    try:
+        with Image.open(directory / thumb_name(filename)) as thumb, Image.open(directory / filename) as photo:
+            return max(thumb.size) >= min(THUMB_EDGE, max(photo.size))
+    except FileNotFoundError:
+        return False
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        return False
+
+
+def regenerate_thumbnail(upload_dir: str, filename: str) -> None:
+    """Rebuild a stored photo's thumbnail at THUMB_EDGE from the stored photo.
+
+    The stored photo is already a cleaned JPEG of at most MAX_EDGE pixels. The
+    new thumbnail replaces the old one atomically, so the app can keep serving
+    it while this runs. Raises PhotoError if the stored photo can't be read.
+    """
+    if not FILENAME_RE.match(filename):
+        raise PhotoError("Not a stored photo filename.")
+    directory = Path(upload_dir)
+    try:
+        with Image.open(directory / filename) as photo:
+            if photo.format != "JPEG" or photo.width * photo.height > MAX_PIXELS:
+                raise PhotoError("That stored photo is not one this app wrote.")
+            photo.draft("RGB", (THUMB_EDGE, THUMB_EDGE))
+            thumb = photo.convert("RGB")
+    except PhotoError:
+        raise
+    except FileNotFoundError:
+        raise PhotoError("The stored photo is missing.") from None
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        raise PhotoError("The stored photo appears to be damaged.") from None
+    try:
+        thumb.thumbnail((THUMB_EDGE, THUMB_EDGE))
+        _write_jpeg(thumb, directory / thumb_name(filename))
+    finally:
+        thumb.close()
+    log.info("Regenerated thumbnail for %s", filename)
+
+
 def _copy_file(source: Path, target: Path) -> None:
     """Copy to a temp file next to the target, then rename, so a crash never leaves half a file."""
     fd, tmp_path = tempfile.mkstemp(dir=target.parent, prefix=".upload-", suffix=".tmp")
@@ -157,7 +199,6 @@ def _copy_file(source: Path, target: Path) -> None:
         except FileNotFoundError:
             pass
         raise
-
 
 def copy_photo(upload_dir: str, filename: str) -> str:
     """Copy a stored photo (and its thumbnail, if it has one) under a new random name.
@@ -184,7 +225,6 @@ def copy_photo(upload_dir: str, filename: str) -> str:
             log.warning("Could not copy thumbnail of %s", filename, exc_info=True)
     log.info("Copied photo %s to %s", filename, new_name)
     return new_name
-
 
 def same_content(upload_dir: str, a: str, b: str) -> bool:
     """True when two stored photos are byte-for-byte identical (cheap size check first)."""
