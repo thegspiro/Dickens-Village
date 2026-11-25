@@ -4,7 +4,14 @@ Usage:
     python -m app.uploads status          # report only (the default)
     python -m app.uploads clean           # same report; deletes nothing
     python -m app.uploads clean --yes     # delete the orphaned files listed
+    python -m app.uploads thumbs          # count thumbnails smaller than the gallery uses
+    python -m app.uploads thumbs --yes    # rebuild them from the stored photos
     docker compose run --rm app python -m app.uploads status
+
+thumbs needs no database: it rebuilds the thumbnail of every stored photo
+(<32 hex>.jpg) whose thumbnail is missing or smaller than photos.THUMB_EDGE
+(photos uploaded before the gallery used 320 px), and is safe to run while
+the app is serving them and to run again.
 
 Files can be left behind when the server stops between saving a file and
 recording it, or between deleting a row and its file. Only files named the way
@@ -106,14 +113,43 @@ def delete_orphans(report: Report) -> int:
     return deleted
 
 
+def stale_thumbnails(upload_dir: Path) -> list[str]:
+    """Stored photos whose thumbnail is missing or smaller than photos.THUMB_EDGE."""
+    if not upload_dir.is_dir():
+        return []
+    return [path.name for path in sorted(upload_dir.iterdir())
+            if path.is_file() and not path.is_symlink() and photos.FILENAME_RE.match(path.name)
+            and not photos.thumbnail_is_current(str(upload_dir), path.name)]
+
+
+def thumbs_command(folder: Path, apply: bool) -> int:
+    stale = stale_thumbnails(folder)
+    print(f"{len(stale)} photo(s) have a thumbnail smaller than {photos.THUMB_EDGE} px (or none)")
+    if not apply:
+        if stale:
+            print("Nothing was changed. Run 'python -m app.uploads thumbs --yes' to rebuild them.")
+        return 0
+    rebuilt = failed = 0
+    for name in stale:
+        try:
+            photos.regenerate_thumbnail(str(folder), name)
+            rebuilt += 1
+        except photos.PhotoError as exc:
+            failed += 1
+            print(f"  {name}: {exc}")
+    print(f"Rebuilt {rebuilt} thumbnail(s)" + (f"; {failed} could not be rebuilt" if failed else ""))
+    return 1 if failed else 0
+
+
 def _size(n: int) -> str:
     return f"{n / (1024 * 1024):.1f} MB" if n >= 1024 * 1024 else f"{n // 1024} KB"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.uploads")
-    parser.add_argument("command", nargs="?", default="status", choices=["status", "clean"])
-    parser.add_argument("--yes", action="store_true", help="with clean: really delete the orphaned files")
+    parser.add_argument("command", nargs="?", default="status", choices=["status", "clean", "thumbs"])
+    parser.add_argument("--yes", action="store_true",
+                        help="with clean: really delete the orphaned files; with thumbs: rebuild the thumbnails")
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -127,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     if not folder.is_dir():
         print(f"Upload folder not found: {folder}", file=sys.stderr)
         return 1
+    if args.command == "thumbs":
+        return thumbs_command(folder, args.yes)
 
     from .config import load_database_config
     from .db import connect

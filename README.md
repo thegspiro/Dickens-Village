@@ -121,6 +121,12 @@ docker compose run --rm app python -m app.uploads status
 ```
 To delete the orphaned files it lists, run `python -m app.uploads clean --yes` the same way. Only files named the way the app names them are considered, files changed in the last hour are skipped (an upload may be in progress), and nothing else in the folder is touched.
 
+Photos uploaded before the gallery update have smaller (320 px) thumbnails, which look soft in the larger gallery. To rebuild them at 480 px from the stored photos (safe while the app is running, and safe to repeat):
+```sh
+docker compose run --rm app python -m app.uploads thumbs --yes
+```
+Leave off `--yes` to only count them. Browsers may show the old thumbnail for up to an hour, and the phone app's offline copy for up to a week, until their caches refresh.
+
 ## Migrations
 
 ```sh
