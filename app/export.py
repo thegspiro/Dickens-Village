@@ -18,11 +18,12 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from . import photos, scans
+from .places import PlaceTree
 from .validation import ITEM_COLUMNS
 
 FORMAT_VERSION = 1
 
-EXTRA_COLUMNS = ("description", "quantity", "condition_grade", "notes")
+EXTRA_COLUMNS = ("description", "quantity", "condition_grade", "notes", "storage_place_id")
 
 # Spreadsheet apps treat a cell starting with one of these as a formula.
 _FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
@@ -57,9 +58,12 @@ def catalog_folder(row: dict[str, Any]) -> str:
 
 def collection_json(data: dict[str, list[dict[str, Any]]], exported_at: dt.datetime) -> dict[str, Any]:
     """The whole collection as one JSON document (paths point into the zip export)."""
+    tree = PlaceTree(data.get("places", []))
     extras: dict[int, list[dict[str, Any]]] = {}
     for row in data["extras"]:
-        extras.setdefault(row["item_id"], []).append({"id": row["id"], **{c: _plain(row[c]) for c in EXTRA_COLUMNS}})
+        extras.setdefault(row["item_id"], []).append({
+            "id": row["id"], **{c: _plain(row.get(c)) for c in EXTRA_COLUMNS},
+            "storage_path": tree.path_text(row.get("storage_place_id")) or None})
     links: dict[int, list[int]] = {}
     for row in data["links"]:
         links.setdefault(row["building_id"], []).append(row["item_id"])
@@ -89,6 +93,8 @@ def collection_json(data: dict[str, list[dict[str, Any]]], exported_at: dt.datet
         for flag in ("has_original_box", "has_sleeve", "on_display"):
             piece[flag] = bool(piece[flag])
         piece.update({
+            "storage_path": tree.path_text(row.get("storage_place_id")) or None,
+            "display_path": tree.path_text(row.get("display_place_id")) or None,
             "catalog_item_number": row.get("catalog_item_number"),
             "catalog_name": row.get("catalog_name"),
             "added": _plain(row.get("created_at")),
@@ -108,6 +114,11 @@ def collection_json(data: dict[str, list[dict[str, Any]]], exported_at: dt.datet
         "format": "dickens-village-collection",
         "format_version": FORMAT_VERSION,
         "exported_at": exported_at.isoformat(timespec="seconds"),
+        "places": [{
+            "id": row["id"], "parent_id": row.get("parent_id"), "name": row["name"], "kind": row.get("kind"),
+            "is_display": bool(row.get("is_display")), "notes": row.get("notes"),
+            "path": tree.path_text(int(row["id"])),
+        } for row in data.get("places", [])],
         "pieces": pieces,
         "catalog_photos": catalog_photos,
     }
@@ -138,14 +149,18 @@ def pieces_csv(data: dict[str, list[dict[str, Any]]]) -> str:
         for row in data[kind]:
             counts[kind][row["item_id"]] = counts[kind].get(row["item_id"], 0) + (
                 int(row["quantity"]) if kind == "extras" else 1)
-    header = ["id", *ITEM_COLUMNS, "catalog_item_number", "catalog_name", "extras", "photos", "scans", "added", "updated"]
+    tree = PlaceTree(data.get("places", []))
+    header = ["id", *ITEM_COLUMNS, "storage_path", "display_path", "catalog_item_number", "catalog_name",
+              "extras", "photos", "scans", "added", "updated"]
     rows = []
     for item in data["items"]:
         values: list[Any] = [item["id"]]
         for column in ITEM_COLUMNS:
-            value = item[column]
+            value = item.get(column)
             values.append(bool(value) if column in ("has_original_box", "has_sleeve", "on_display") else value)
-        values += [item.get("catalog_item_number"), item.get("catalog_name"),
+        values += [tree.path_text(item.get("storage_place_id")) or None,
+                   tree.path_text(item.get("display_place_id")) or None,
+                   item.get("catalog_item_number"), item.get("catalog_name"),
                    counts["extras"].get(item["id"], 0), counts["photos"].get(item["id"], 0),
                    counts["scans"].get(item["id"], 0), item.get("created_at"), item.get("updated_at")]
         rows.append(values)
@@ -154,8 +169,10 @@ def pieces_csv(data: dict[str, list[dict[str, Any]]]) -> str:
 
 def extras_csv(data: dict[str, list[dict[str, Any]]]) -> str:
     names = {item["id"]: item["name"] for item in data["items"]}
-    return _csv(["id", "piece_id", "piece_name", *EXTRA_COLUMNS],
-                ([e["id"], e["item_id"], names.get(e["item_id"]), *(e[c] for c in EXTRA_COLUMNS)]
+    tree = PlaceTree(data.get("places", []))
+    return _csv(["id", "piece_id", "piece_name", *EXTRA_COLUMNS, "storage_path"],
+                ([e["id"], e["item_id"], names.get(e["item_id"]), *(e.get(c) for c in EXTRA_COLUMNS),
+                  tree.path_text(e.get("storage_place_id")) or None]
                  for e in data["extras"]))
 
 

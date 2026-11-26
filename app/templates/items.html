@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import condition_badge, storage_text, datalist %}
+{% from "_macros.html" import condition_badge, storage_text %}
 {% block title %}Collection{% endblock %}
 {% block content %}
 <h1>Collection <span class="muted">({{ total }} piece{{ '' if total == 1 else 's' }})</span></h1>
@@ -11,8 +11,8 @@
       <input id="q" name="q" value="{{ filters.q or '' }}" maxlength="100" placeholder="Name, item number or series">
     </div>
   </div>
-  {% set more_active = filters.category or filters.condition_grade or filters.storage_location or filters.storage_tub
-      or filters.storage_tray or filters.has_extras or filters.on_display or filters.sort != 'name' %}
+  {% set more_active = filters.category or filters.condition_grade or filters.place
+      or filters.has_extras or filters.on_display or filters.sort != 'name' %}
   <details class="more-filters"{% if more_active %} open{% endif %}>
   <summary>More filters</summary>
   <div class="grid">
@@ -30,17 +30,13 @@
         {% for v, t in CONDITIONS.items() %}<option value="{{ v }}" {% if filters.condition_grade == v %}selected{% endif %}>{{ t }}</option>{% endfor %}
       </select>
     </div>
-    <div>
-      <label for="storage_location">Location</label>
-      <input id="storage_location" name="storage_location" list="dl-location" value="{{ filters.storage_location or '' }}" maxlength="120">
-    </div>
-    <div>
-      <label for="storage_tub">Tub</label>
-      <input id="storage_tub" name="storage_tub" list="dl-tub" value="{{ filters.storage_tub or '' }}" maxlength="60">
-    </div>
-    <div>
-      <label for="storage_tray">Tray</label>
-      <input id="storage_tray" name="storage_tray" list="dl-tray" value="{{ filters.storage_tray or '' }}" maxlength="60">
+    <div class="wide">
+      <label for="place">Stored in</label>
+      <select id="place" name="place">
+        <option value="">Anywhere</option>
+        {% for v, t in place_options(False) %}<option value="{{ v }}" {% if filters.place == v %}selected{% endif %}>{{ t }}</option>{% endfor %}
+      </select>
+      <span class="hint">Includes the places inside it.</span>
     </div>
     <div>
       <label for="has_extras">Extras</label>
@@ -66,13 +62,12 @@
     </div>
   </div>
   </details>
+  {# Links made before storage places (Location / Tub / Tray) keep working. #}
+  {% for key in ('storage_location', 'storage_tub', 'storage_tray') %}{% if filters[key] %}<input type="hidden" name="{{ key }}" value="{{ filters[key] }}">{% endif %}{% endfor %}
   {% if filters.exact_storage %}<input type="hidden" name="exact_storage" value="yes">{% endif %}
   {% if filters.unstored %}<input type="hidden" name="unstored" value="yes"><p class="muted">Showing only pieces with no storage assigned.</p>{% endif %}
   <button type="submit">Filter</button>
   <a href="{{ url_for('main.item_list') }}">Clear</a>
-  {{ datalist('dl-location', suggestions.storage_location) }}
-  {{ datalist('dl-tub', suggestions.storage_tub) }}
-  {{ datalist('dl-tray', suggestions.storage_tray) }}
 </form>
 
 {% if items %}

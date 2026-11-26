@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% from "_macros.html" import condition_badge %}
+{% set title = place | place_label %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<nav class="breadcrumbs" aria-label="Where this place is">
+  <a href="{{ url_for('main.storage') }}">Storage</a>
+  {% for p in tree.path(place.id)[:-1] %} › <a href="{{ url_for('main.place_detail', place_id=p.id) }}">{{ p | place_label }}</a>{% endfor %}
+</nav>
+<div class="title-row">
+  <h1>{{ title }}{% if place.is_display %} <span class="badge">Display spot</span>{% endif %}</h1>
+  <div class="actions">
+    <a class="button" href="{{ url_for('main.place_edit', place_id=place.id) }}">Edit</a>
+    <a class="button secondary" href="{{ url_for('main.place_new', parent=place.id) }}">Add a place inside</a>
+  </div>
+</div>
+{% if place.notes %}<p class="card pre">{{ place.notes }}</p>{% endif %}
+
+{% if children %}
+<section class="card">
+  <h2>Places inside</h2>
+  <ul class="links">
+  {% for c in children %}
+    <li><a href="{{ url_for('main.place_detail', place_id=c.id) }}">{{ c | place_label }}</a>
+      {% if c.is_display %}<span class="badge">Display spot</span>{% endif %}
+      <span class="muted">{{ tree.children.get(c.id, []) | length }} place{{ '' if tree.children.get(c.id, []) | length == 1 else 's' }} inside</span></li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% macro where(pid) -%}
+  {%- if pid != place.id %}<a href="{{ url_for('main.place_detail', place_id=pid) }}">{{ tree.path_text(pid, depth) }}</a>{% else %}<span class="muted">Here</span>{% endif -%}
+{%- endmacro %}
+
+{% if not place.is_display or contents.stored or contents.extras %}
+<section class="card" id="stored">
+  <div class="title-row">
+    <h2>Stored here <span class="muted">({{ contents.stored | length }})</span></h2>
+    {% if not place.is_display %}<a class="button secondary" href="{{ url_for('main.item_new', place=place.id) }}">Add a piece here</a>{% endif %}
+  </div>
+  {% if contents.stored %}
+  <div class="table-wrap">
+  <table class="responsive">
+    <thead><tr><th>Piece</th><th>Category</th>{% if children %}<th>Where</th>{% endif %}<th>Now</th></tr></thead>
+    <tbody>
+    {% for i in contents.stored %}
+      <tr>
+        <td class="primary"><a href="{{ url_for('main.item_detail', item_id=i.id) }}">{{ i.name }}</a>{% if i.item_number %} <span class="muted">#{{ i.item_number }}</span>{% endif %}</td>
+        <td data-label="Category">{{ CATEGORIES[i.category] }}</td>
+        {% if children %}<td data-label="Where">{{ where(i.storage_place_id) }}</td>{% endif %}
+        <td data-label="Now">{% if i.on_display %}<span class="badge">On display</span>{% else %}Put away{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}<p class="muted">No pieces are stored here.</p>{% endif %}
+
+  {% if contents.extras %}
+  <h3>Extras stored here</h3>
+  <ul class="links">
+  {% for e in contents.extras %}
+    <li>{{ e.description }}{% if e.quantity > 1 %} ×{{ e.quantity }}{% endif %}
+      <span class="muted">for <a href="{{ url_for('main.item_detail', item_id=e.item_id) }}#extras">{{ e.item_name }}</a>{% if children and e.storage_place_id != place.id %} · {{ where(e.storage_place_id) }}{% endif %}</span></li>
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if place.is_display or contents.displayed %}
+<section class="card" id="displayed">
+  <div class="title-row">
+    <h2>Displayed here <span class="muted">({{ contents.displayed | length }})</span></h2>
+    {% if place.is_display %}<a class="button secondary" href="{{ url_for('main.item_new', display=place.id) }}">Add a piece here</a>{% endif %}
+  </div>
+  {% if contents.displayed %}
+  <ul class="links">
+  {% for i in contents.displayed %}
+    <li><a href="{{ url_for('main.item_detail', item_id=i.id) }}">{{ i.name }}</a>
+      {% if children and i.display_place_id != place.id %}<span class="muted">{{ where(i.display_place_id) }}</span>{% endif %}
+      {% if i.on_display %}<span class="badge">On display</span>{% else %}<span class="muted">In storage{% if i.storage_place_id %}: {{ place_path(i.storage_place_id) }}{% endif %}</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+  {% else %}<p class="muted">No pieces have this as their display spot.</p>{% endif %}
+</section>
+{% endif %}
+
+{% if not children and not place['items'] and not place.displayed and not place.extras %}
+<form method="post" action="{{ url_for('main.place_delete', place_id=place.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="danger">Delete this place</button>
+</form>
+{% endif %}
+{% endblock %}

@@ -7,6 +7,7 @@ import logging
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
+from .places import PlaceTree, legacy_path
 from .validation import ITEM_COLUMNS, STORAGE_COLUMNS
 
 log = logging.getLogger("dickens.repository")
@@ -61,6 +62,21 @@ def _is_duplicate_key(exc: Exception) -> bool:
 
 class VersionConflict(Exception):
     """The row's version is not the one the caller expected: someone else saved it first."""
+
+
+class DuplicatePlace(Exception):
+    """A place with that name already exists in the same parent place."""
+
+
+EXTRA_COLUMNS = ("description", "quantity", "condition_grade", "notes", "storage_place_id")
+
+_PLACE_COLUMNS = ("parent_id", "name", "kind", "is_display", "notes")
+
+# Fingerprint of the places table for ETags.
+_PLACES_FINGERPRINT = (
+    "CONCAT_WS(':', COUNT(*), COALESCE(SUM(CRC32(CONCAT_WS('|', id, COALESCE(parent_id, 0), name, "
+    "COALESCE(kind, ''), is_display))), 0))"
+)
 
 
 def _like_escape(value: str) -> str:
@@ -138,7 +154,15 @@ class MySQLRepository:
                 if not filters.get(column):
                     where.append(f"i.{column} IS NULL")
         if filters.get("unstored"):
-            where.append("i.storage_location IS NULL AND i.storage_tub IS NULL AND i.storage_tray IS NULL")
+            where.append("i.storage_place_id IS NULL")
+        if filters.get("place"):
+            tree = PlaceTree(self._all("SELECT id, parent_id, name, kind FROM storage_places"))
+            ids = tree.descendants(filters["place"]) if filters["place"] in tree else []
+            if ids:
+                where.append(f"i.storage_place_id IN ({', '.join(['%s'] * len(ids))})")
+                params.extend(ids)
+            else:
+                where.append("1 = 0")
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         order_sql = _ORDER_BY.get(filters.get("sort", "name"), _ORDER_BY["name"])
@@ -159,12 +183,14 @@ class MySQLRepository:
         return row
 
     def create_item(self, data: dict[str, Any]) -> int:
+        """Insert a piece. Its Location / Tub / Tray columns are set from its storage place."""
         columns = list(ITEM_COLUMNS)
         sql = (
             f"INSERT INTO items ({', '.join(columns)}) "
             f"VALUES ({', '.join(['%s'] * len(columns))})"
         )
         with self._write() as cur:
+            data = self._apply_storage(cur, data)
             cur.execute(sql, [data[c] for c in columns])
             new_id = int(cur.lastrowid)
         log.info("Created item id=%s", new_id)
@@ -180,6 +206,9 @@ class MySQLRepository:
         columns = list(ITEM_COLUMNS)
         sql = f"UPDATE items SET {', '.join(f'{c} = %s' for c in columns)} WHERE id = %s"
         with self._write() as cur:
+            # Places are read (and share-locked) before the item row, the same
+            # order a place rename takes its locks in.
+            data = self._apply_storage(cur, data)
             cur.execute("SELECT id, version FROM items WHERE id = %s FOR UPDATE", (item_id,))
             row = cur.fetchone()
             if row is None:
@@ -212,6 +241,7 @@ class MySQLRepository:
         sql = f"INSERT INTO items ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})"
         try:
             with self._write() as cur:
+                data = self._apply_storage(cur, data)
                 cur.execute(sql, [*[data[c] for c in ITEM_COLUMNS], client_uuid])
                 new_id = int(cur.lastrowid)
         except Exception as exc:  # a concurrent retry won the race on the unique key
@@ -230,10 +260,11 @@ class MySQLRepository:
         resolve receives the current row and returns ("ok", full_item_data) or
         (status, payload) for any other outcome, which is passed back unchanged
         along with the current row. Returns ("missing", None, None) if the item
-        does not exist.
+        does not exist. The data may carry "_legacy_storage": see _apply_storage.
         """
         columns = list(ITEM_COLUMNS)
         with self._write() as cur:
+            self._read_places(cur)  # lock order: places, then the item
             cur.execute("SELECT * FROM items WHERE id = %s FOR UPDATE", (item_id,))
             row = cur.fetchone()
             if row is None:
@@ -241,6 +272,7 @@ class MySQLRepository:
             status, payload = resolve(row)
             if status != "ok":
                 return status, payload, row
+            payload = self._apply_storage(cur, payload)
             cur.execute(
                 f"UPDATE items SET {', '.join(f'{c} = %s' for c in columns)}, version = version + 1 "
                 "WHERE id = %s",
@@ -257,8 +289,9 @@ class MySQLRepository:
         photos = self._all("SELECT id, item_id, client_uuid, caption FROM item_photos "
                            "ORDER BY item_id, sort_order, id")
         scans = self._all("SELECT id, item_id FROM item_scans ORDER BY item_id, id")
+        places = self._all("SELECT id, parent_id, name, kind, is_display FROM storage_places ORDER BY id")
         self._end_read()
-        return {"items": items, "extras": extras, "photos": photos, "scans": scans}
+        return {"items": items, "extras": extras, "photos": photos, "scans": scans, "places": places}
 
     def snapshot_etag(self) -> str:
         row = self._one(
@@ -266,10 +299,11 @@ class MySQLRepository:
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(version), 0), COALESCE(MAX(id), 0)) FROM items) AS i, "
             "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(version), 0), COALESCE(MAX(id), 0)) FROM item_extras) AS e, "
             f"(SELECT {_PHOTOS_FINGERPRINT} FROM item_photos) AS p, "
-            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_scans) AS s"
+            "(SELECT CONCAT_WS(':', COUNT(*), COALESCE(SUM(id), 0)) FROM item_scans) AS s, "
+            f"(SELECT {_PLACES_FINGERPRINT} FROM storage_places) AS pl"
         )
         self._end_read()
-        return f"{row['i']}/{row['e']}/{row['p']}/{row['s']}"
+        return f"{row['i']}/{row['e']}/{row['p']}/{row['s']}/{row['pl']}"
 
     def catalog_all(self) -> list[dict[str, Any]]:
         rows = self._all(
@@ -335,9 +369,9 @@ class MySQLRepository:
             if cur.fetchone() is None:
                 return None
             cur.execute(
-                "INSERT INTO item_extras (item_id, description, quantity, condition_grade, notes) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (item_id, data["description"], data["quantity"], data["condition_grade"], data["notes"]),
+                "INSERT INTO item_extras (item_id, description, quantity, condition_grade, notes, storage_place_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (item_id, *[data.get(c) for c in EXTRA_COLUMNS]),
             )
             return int(cur.lastrowid)
 
@@ -354,10 +388,9 @@ class MySQLRepository:
                 if cur.fetchone() is None:
                     return None, False
                 cur.execute(
-                    "INSERT INTO item_extras (item_id, description, quantity, condition_grade, notes, client_uuid) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (item_id, data["description"], data["quantity"], data["condition_grade"], data["notes"],
-                     client_uuid),
+                    "INSERT INTO item_extras (item_id, description, quantity, condition_grade, notes, "
+                    "storage_place_id, client_uuid) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (item_id, *[data.get(c) for c in EXTRA_COLUMNS], client_uuid),
                 )
                 return int(cur.lastrowid), True
         except Exception as exc:
@@ -381,9 +414,8 @@ class MySQLRepository:
                 return status, payload, row
             cur.execute(
                 "UPDATE item_extras SET description = %s, quantity = %s, condition_grade = %s, notes = %s, "
-                "version = version + 1 WHERE id = %s",
-                (payload["description"], payload["quantity"], payload["condition_grade"], payload["notes"],
-                 extra_id),
+                "storage_place_id = %s, version = version + 1 WHERE id = %s",
+                (*[payload.get(c) for c in EXTRA_COLUMNS], extra_id),
             )
             cur.execute("SELECT * FROM item_extras WHERE id = %s", (extra_id,))
             fresh = cur.fetchone()
@@ -404,9 +436,8 @@ class MySQLRepository:
                 raise VersionConflict(extra_id)
             cur.execute(
                 "UPDATE item_extras SET description = %s, quantity = %s, condition_grade = %s, notes = %s, "
-                "version = version + 1 WHERE id = %s AND item_id = %s",
-                (data["description"], data["quantity"], data["condition_grade"], data["notes"],
-                 extra_id, item_id),
+                "storage_place_id = %s, version = version + 1 WHERE id = %s AND item_id = %s",
+                (*[data.get(c) for c in EXTRA_COLUMNS], extra_id, item_id),
             )
             return True
 
@@ -739,12 +770,191 @@ class MySQLRepository:
     def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
         """Pieces in the collection linked to a catalog entry."""
         rows = self._all(
-            "SELECT id, name, category, condition_grade, storage_location, storage_tub, storage_tray "
-            "FROM items WHERE catalog_id = %s ORDER BY name, id",
+            "SELECT id, name, category, condition_grade, storage_location, storage_tub, storage_tray, "
+            "storage_place_id, display_place_id, on_display FROM items WHERE catalog_id = %s ORDER BY name, id",
             (catalog_id,),
         )
         self._end_read()
         return rows
+
+    # -- storage places ---------------------------------------------------------
+
+    def _read_places(self, cur: Any) -> PlaceTree:
+        """Every place, share-locked until the transaction ends, so a rename or move
+        can't change a path while a piece is being saved against it."""
+        cur.execute("SELECT id, parent_id, name, kind, is_display FROM storage_places FOR SHARE")
+        return PlaceTree(cur.fetchall())
+
+    def _apply_storage(self, cur: Any, data: dict[str, Any]) -> dict[str, Any]:
+        """Set a piece's Location / Tub / Tray columns from its storage place.
+
+        With "_legacy_storage" set (Location / Tub / Tray sent by an older
+        phone app), the place is first found, or created, from those values.
+        Returns a copy of data without the flag.
+        """
+        data = dict(data)
+        legacy = data.pop("_legacy_storage", False)
+        tree = self._read_places(cur)
+        if legacy:
+            steps = legacy_path(data.get("storage_location"), data.get("storage_tub"), data.get("storage_tray"))
+            data["storage_place_id"] = self._find_or_create_path(cur, steps)
+            tree = self._read_places(cur)
+        place_id = data.get("storage_place_id")
+        data["storage_location"], data["storage_tub"], data["storage_tray"] = tree.legacy(place_id)
+        return data
+
+    def _find_or_create_path(self, cur: Any, steps: list[tuple[str, str | None]]) -> int | None:
+        parent: int | None = None
+        for name, kind in steps:
+            cur.execute("SELECT id FROM storage_places WHERE parent_key = %s AND name = %s FOR UPDATE",
+                        (parent or 0, name))
+            row = cur.fetchone()
+            if row is None:
+                cur.execute("INSERT INTO storage_places (parent_id, name, kind) VALUES (%s, %s, %s)",
+                            (parent, name, kind))
+                parent = int(cur.lastrowid)
+                log.info("Created storage place id=%s from an older phone app's Location/Tub/Tray", parent)
+            else:
+                parent = int(row["id"])
+        return parent
+
+    def list_places(self) -> list[dict[str, Any]]:
+        """Every place, with how many pieces are stored in it (items), displayed
+        in it (displayed) and how many extras are stored in it (extras)."""
+        rows = self._all(
+            "SELECT p.*, "
+            "(SELECT COUNT(*) FROM items i WHERE i.storage_place_id = p.id) AS items, "
+            "(SELECT COUNT(*) FROM items i WHERE i.display_place_id = p.id) AS displayed, "
+            "(SELECT COUNT(*) FROM item_extras e WHERE e.storage_place_id = p.id) AS extras "
+            "FROM storage_places p ORDER BY p.id"
+        )
+        self._end_read()
+        return rows
+
+    def get_place(self, place_id: int) -> dict[str, Any] | None:
+        row = self._one("SELECT * FROM storage_places WHERE id = %s", (place_id,))
+        self._end_read()
+        return row
+
+    def create_place(self, data: dict[str, Any]) -> int | None:
+        """Add a place. Returns None if its parent no longer exists; raises
+        DuplicatePlace if the parent already has a place with that name."""
+        try:
+            with self._write() as cur:
+                if data.get("parent_id") is not None:
+                    cur.execute("SELECT id FROM storage_places WHERE id = %s FOR UPDATE", (data["parent_id"],))
+                    if cur.fetchone() is None:
+                        return None
+                cur.execute(
+                    f"INSERT INTO storage_places ({', '.join(_PLACE_COLUMNS)}) "
+                    f"VALUES ({', '.join(['%s'] * len(_PLACE_COLUMNS))})",
+                    [data.get(c) for c in _PLACE_COLUMNS],
+                )
+                new_id = int(cur.lastrowid)
+        except Exception as exc:
+            if _is_duplicate_key(exc):
+                raise DuplicatePlace() from exc
+            raise
+        log.info("Created storage place id=%s", new_id)
+        return new_id
+
+    def update_place(self, place_id: int, data: dict[str, Any]) -> str | None:
+        """Rename, retype or move a place. Returns None when saved, "missing" if the
+        place is gone, or a message saying why it can't be moved there. Raises
+        DuplicatePlace for a name already used in the new parent.
+
+        The Location / Tub / Tray columns of every piece stored in it, or in a
+        place inside it, are updated in the same transaction.
+        """
+        try:
+            with self._write() as cur:
+                cur.execute("SELECT id, parent_id, name, kind, is_display FROM storage_places FOR UPDATE")
+                tree = PlaceTree(cur.fetchall())
+                if place_id not in tree:
+                    return "missing"
+                problem = tree.move_problem(place_id, data.get("parent_id"))
+                if problem:
+                    return problem
+                if bool(data.get("is_display")) != bool(tree.by_id[place_id].get("is_display")):
+                    problem = self._role_change_problem(cur, place_id, bool(data.get("is_display")))
+                    if problem:
+                        return problem
+                cur.execute(
+                    f"UPDATE storage_places SET {', '.join(f'{c} = %s' for c in _PLACE_COLUMNS)} WHERE id = %s",
+                    [*[data.get(c) for c in _PLACE_COLUMNS], place_id],
+                )
+                cur.execute("SELECT id, parent_id, name, kind, is_display FROM storage_places")
+                self._refresh_legacy(cur, PlaceTree(cur.fetchall()), place_id)
+        except Exception as exc:
+            if _is_duplicate_key(exc):
+                raise DuplicatePlace() from exc
+            raise
+        log.info("Updated storage place id=%s", place_id)
+        return None
+
+    @staticmethod
+    def _role_change_problem(cur: Any, place_id: int, to_display: bool) -> str | None:
+        """A place can only become a display spot when nothing is stored in it, and
+        stop being one when no piece has it as its display spot."""
+        if to_display:
+            cur.execute("SELECT (SELECT COUNT(*) FROM items WHERE storage_place_id = %s) "
+                        "+ (SELECT COUNT(*) FROM item_extras WHERE storage_place_id = %s) AS n", (place_id, place_id))
+            if cur.fetchone()["n"]:
+                return "Pieces or extras are stored here. Move them before making this a display spot."
+        else:
+            cur.execute("SELECT COUNT(*) AS n FROM items WHERE display_place_id = %s", (place_id,))
+            if cur.fetchone()["n"]:
+                return "Pieces have this as their display spot. Change theirs before making it a storage place."
+        return None
+
+    @staticmethod
+    def _refresh_legacy(cur: Any, tree: PlaceTree, place_id: int) -> None:
+        for pid in tree.descendants(place_id):
+            cur.execute(
+                "UPDATE items SET storage_location = %s, storage_tub = %s, storage_tray = %s "
+                "WHERE storage_place_id = %s",
+                (*tree.legacy(pid), pid),
+            )
+
+    def delete_place(self, place_id: int) -> str | None:
+        """Delete an empty place. Returns None when deleted, "missing" if it was
+        already gone, or a message saying what is still in it."""
+        with self._write() as cur:
+            cur.execute("SELECT id FROM storage_places WHERE id = %s FOR UPDATE", (place_id,))
+            if cur.fetchone() is None:
+                return "missing"
+            cur.execute(
+                "SELECT (SELECT COUNT(*) FROM storage_places WHERE parent_id = %s) AS places, "
+                "(SELECT COUNT(*) FROM items WHERE storage_place_id = %s OR display_place_id = %s) AS items, "
+                "(SELECT COUNT(*) FROM item_extras WHERE storage_place_id = %s) AS extras",
+                (place_id, place_id, place_id, place_id),
+            )
+            counts = cur.fetchone()
+            if counts["places"] or counts["items"] or counts["extras"]:
+                return "Only an empty place can be deleted. Move what's in it first."
+            cur.execute("DELETE FROM storage_places WHERE id = %s", (place_id,))
+        log.info("Deleted storage place id=%s", place_id)
+        return None
+
+    def place_contents(self, place_ids: list[int]) -> dict[str, list[dict[str, Any]]]:
+        """What belongs in these places: pieces stored there, pieces displayed
+        there, and extras stored there (with their piece's name)."""
+        if not place_ids:
+            return {"stored": [], "displayed": [], "extras": []}
+        marks = ", ".join(["%s"] * len(place_ids))
+        fields = "i.id, i.name, i.category, i.item_number, i.on_display, i.storage_place_id, i.display_place_id"
+        data = {
+            "stored": self._all(f"SELECT {fields} FROM items i WHERE i.storage_place_id IN ({marks}) "
+                                "ORDER BY i.name, i.id", place_ids),
+            "displayed": self._all(f"SELECT {fields} FROM items i WHERE i.display_place_id IN ({marks}) "
+                                   "ORDER BY i.name, i.id", place_ids),
+            "extras": self._all(
+                f"SELECT e.id, e.item_id, e.description, e.quantity, e.storage_place_id, i.name AS item_name, "
+                f"i.on_display FROM item_extras e JOIN items i ON i.id = e.item_id "
+                f"WHERE e.storage_place_id IN ({marks}) ORDER BY i.name, e.description, e.id", place_ids),
+        }
+        self._end_read()
+        return data
 
     # -- export ------------------------------------------------------------------
 
@@ -766,6 +976,8 @@ class MySQLRepository:
                 "scans": self._all(
                     "SELECT id, item_id, filename, original_name, size_bytes, created_at "
                     "FROM item_scans ORDER BY item_id, id"),
+                "places": self._all(
+                    "SELECT id, parent_id, name, kind, is_display, notes FROM storage_places ORDER BY id"),
                 "catalog_photos": self._all(
                     "SELECT p.id, p.catalog_id, p.filename, p.original_name, p.sort_order, p.caption, p.created_at, "
                     "c.item_number, c.name FROM catalog_photos p JOIN catalog_items c ON c.id = p.catalog_id "
@@ -788,15 +1000,11 @@ class MySQLRepository:
 
     # -- summaries ------------------------------------------------------------
 
-    def storage_summary(self) -> list[dict[str, Any]]:
-        rows = self._all(
-            "SELECT storage_location, storage_tub, storage_tray, COUNT(*) AS item_count "
-            "FROM items GROUP BY storage_location, storage_tub, storage_tray "
-            "ORDER BY storage_location IS NULL, storage_location, storage_tub IS NULL, "
-            "storage_tub, storage_tray IS NULL, storage_tray"
-        )
+    def count_unplaced(self) -> int:
+        """Pieces with no storage place."""
+        row = self._one("SELECT COUNT(*) AS n FROM items WHERE storage_place_id IS NULL")
         self._end_read()
-        return rows
+        return int(row["n"]) if row else 0
 
     def collection_summary(self) -> dict[str, Any]:
         by_category = self._all(

@@ -26,7 +26,8 @@ from app.validation import parse_extra_form, parse_item_form, parse_list_filters
 pytestmark = pytest.mark.integration
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
-TABLES = ("item_scans", "item_photos", "item_links", "item_extras", "items", "catalog_photos", "catalog_items")
+TABLES = ("item_scans", "item_photos", "item_links", "item_extras", "items", "catalog_photos", "catalog_items",
+          "storage_places")
 CATALOG_DIR = Path(__file__).resolve().parents[2] / "data" / "catalog"
 
 
@@ -69,13 +70,17 @@ def repo(db_config, migrated):
     conn = connect(db_config)
     r = MySQLRepository(conn)
     yield r
+    _truncate_all(conn)
+    r.close()
+
+
+def _truncate_all(conn):
     with conn.cursor() as cur:
         cur.execute("SET FOREIGN_KEY_CHECKS = 0")
         for table in TABLES:
             cur.execute(f"TRUNCATE TABLE {table}")
         cur.execute("SET FOREIGN_KEY_CHECKS = 1")
     conn.commit()
-    r.close()
 
 
 def item(**fields):
@@ -99,6 +104,14 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
+        with conn.cursor() as cur:
+            cur.execute("SHOW TABLES LIKE 'storage_places'")
+            assert cur.fetchone() is None
+            cur.execute("SHOW COLUMNS FROM items LIKE 'storage_place_id'")
+            assert cur.fetchone() is None
+            cur.execute("SHOW COLUMNS FROM item_extras LIKE 'storage_place_id'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0008_catalog_listed"
         with conn.cursor() as cur:
             cur.execute("SHOW COLUMNS FROM catalog_items LIKE 'listed'")
@@ -134,7 +147,7 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
             assert cur.fetchone() is None
         assert migrate.migrate_up(conn, migrations) == [
             "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
-            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed"]
+            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -144,19 +157,25 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
 
 
 def test_create_get_update_roundtrip(repo):
+    basement = _place(repo, "Basement")
+    tub3 = _place(repo, "3", basement, "Tub")
+    tray = _place(repo, "Top", tub3, "Tray")
+    tub4 = _place(repo, "4", basement, "Tub")
     item_id = repo.create_item(item(
-        price_paid="45.50", purchase_date="2025-12-01", storage_location="Basement",
-        storage_tub="3", storage_tray="Top", condition_grade="good", has_original_box="1",
+        price_paid="45.50", purchase_date="2025-12-01", storage_place_id=str(tray),
+        condition_grade="good", has_original_box="1",
     ))
     row = repo.get_item(item_id)
     assert row["price_paid"] == Decimal("45.50")
     assert row["purchase_date"] == dt.date(2025, 12, 1)
-    assert row["storage_tub"] == "3" and row["has_original_box"] == 1
+    assert row["storage_place_id"] == tray and row["has_original_box"] == 1
+    assert (row["storage_location"], row["storage_tub"], row["storage_tray"]) == ("Basement", "3", "Top")
     assert row["extras_count"] == 0
 
-    assert repo.update_item(item_id, item(name="Renamed", storage_tub="4"))
+    assert repo.update_item(item_id, item(name="Renamed", storage_place_id=str(tub4)))
     row = repo.get_item(item_id)
-    assert row["name"] == "Renamed" and row["storage_tub"] == "4" and row["price_paid"] is None
+    assert row["name"] == "Renamed" and row["price_paid"] is None
+    assert (row["storage_location"], row["storage_tub"], row["storage_tray"]) == ("Basement", "4", None)
     assert repo.update_item(999999, item()) is False
 
 
@@ -184,19 +203,25 @@ def test_injection_attempt_is_just_text(repo):
     assert repo.list_items(filters())[1] == 1
 
 
-def test_storage_filters_and_summary(repo):
-    repo.create_item(item(name="A", storage_location="Attic", storage_tub="1", storage_tray="Top"))
-    repo.create_item(item(name="B", storage_location="Attic", storage_tub="1", storage_tray="Top"))
-    repo.create_item(item(name="C", storage_location="Attic", storage_tub="2"))
+def test_storage_filters_and_counts(repo):
+    attic = _place(repo, "Attic")
+    tub1 = _place(repo, "1", attic, "Tub")
+    top = _place(repo, "Top", tub1, "Tray")
+    tub2 = _place(repo, "2", attic, "Tub")
+    repo.create_item(item(name="A", storage_place_id=str(top)))
+    repo.create_item(item(name="B", storage_place_id=str(top)))
+    repo.create_item(item(name="C", storage_place_id=str(tub2)))
     repo.create_item(item(name="D"))
+    # the old Location / Tub / Tray filters still work on the columns kept in step
     assert repo.list_items(filters(storage_tub="1", storage_tray="Top"))[1] == 2
     assert repo.list_items(filters(unstored="yes"))[1] == 1
     assert repo.list_items(filters(storage_location="Attic"))[1] == 3
     assert repo.list_items(filters(storage_location="Attic", storage_tub="2", exact_storage="yes"))[1] == 1
     assert repo.list_items(filters(storage_location="Attic", exact_storage="yes"))[1] == 0
-    summary = {(r["storage_location"], r["storage_tub"], r["storage_tray"]): r["item_count"]
-               for r in repo.storage_summary()}
-    assert summary == {("Attic", "1", "Top"): 2, ("Attic", "2", None): 1, (None, None, None): 1}
+    assert repo.list_items(filters(place=str(attic)))[1] == 3
+    counts = {p["id"]: p["items"] for p in repo.list_places()}
+    assert counts == {attic: 0, tub1: 0, top: 2, tub2: 1}
+    assert repo.count_unplaced() == 1
     assert repo.distinct_values("storage_tub") == ["1", "2"]
     with pytest.raises(ValueError):
         repo.distinct_values("name; DROP TABLE items")
@@ -431,21 +456,23 @@ def test_create_from_client_is_idempotent(repo):
 
 
 def test_patch_item_paths(repo):
-    item_id = repo.create_item(item(storage_tub="1"))
+    tub1, tub2 = _place(repo, "1", None, "Tub"), _place(repo, "2", None, "Tub")
+    item_id = repo.create_item(item(storage_place_id=str(tub1)))
     seen = {}
 
     def conflict(row):
-        seen["tub"] = row["storage_tub"]
+        seen["tub"] = row["storage_location"]
         return "conflict", ["details"]
 
     status, payload, row = repo.patch_item(item_id, conflict)
     assert (status, payload, row["version"], seen["tub"]) == ("conflict", ["details"], 1, "1")
 
     def ok(row):
-        return "ok", item(storage_tub="2")
+        return "ok", item(storage_place_id=str(tub2))
 
     status, _, row = repo.patch_item(item_id, ok)
-    assert status == "ok" and row["storage_tub"] == "2" and row["version"] == 2
+    assert status == "ok" and row["storage_place_id"] == tub2 and row["storage_location"] == "2"
+    assert row["version"] == 2
     assert repo.patch_item(999_999, ok)[0] == "missing"
 
 
@@ -515,18 +542,21 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
     target = by_version["0007_photo_order_captions"]
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, list(by_version.values())) == "0009_storage_places"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0008_catalog_listed"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0007_photo_order_captions"
-        repo = MySQLRepository(conn)
-        a = repo.create_item(item(name="Backfill A"))
-        b = repo.create_item(item(name="Backfill B"))
+        # Plain SQL: today's repository expects the newer tables.
         with conn.cursor() as cur:
+            cur.execute("INSERT INTO items (category, name) VALUES ('building', 'Backfill A')")
+            a = cur.lastrowid
+            cur.execute("INSERT INTO items (category, name) VALUES ('building', 'Backfill B')")
+            b = cur.lastrowid
             for item_id, name in ((a, "a1"), (a, "a2"), (a, "a3"), (b, "b1"), (b, "b2")):
                 cur.execute("INSERT INTO item_photos (item_id, filename) VALUES (%s, %s)",
                             (item_id, f"{name:0<32}.jpg"))
         conn.commit()
         assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions",
-                                                                       "0008_catalog_listed"]
+                                                                       "0008_catalog_listed", "0009_storage_places"]
 
         def order(item_id):
             with conn.cursor() as cur:
@@ -666,7 +696,7 @@ def test_export_data_reads_everything_consistently(db_config, repo):
     repo.set_photo_caption(photo, "Front")
     repo.add_scan(building, "f" * 32 + ".glb", "scan.glb", 99)
     data = repo.export_data()
-    assert {"items", "extras", "links", "photos", "scans", "catalog_photos"} == set(data)
+    assert {"items", "extras", "links", "photos", "scans", "catalog_photos", "places"} == set(data)
     names = {r["id"]: r["name"] for r in data["items"]}
     assert names[building] == "Export building" and "catalog_item_number" in data["items"][0]
     assert {"building_id": building, "item_id": figure} in data["links"]
@@ -734,3 +764,194 @@ def test_catalog_for_matching(db_config, repo):
     assert rows and all(r["item_number"] for r in rows)
     index = catalog_match.index_entries(rows)
     assert [e["item_number"] for e in catalog_match.match("65161-2.jpg", index)[1]] == ["56.65161"]
+
+
+# -- storage places (0009) -----------------------------------------------------------
+
+
+def _legacy_items(conn, rows):
+    """Insert pieces the way the app stored them before 0009 (Location / Tub / Tray text)."""
+    ids = {}
+    with conn.cursor() as cur:
+        for name, loc, tub, tray in rows:
+            cur.execute("INSERT INTO items (category, name, storage_location, storage_tub, storage_tray) "
+                        "VALUES ('building', %s, %s, %s, %s)", (name, loc, tub, tray))
+            ids[name] = cur.lastrowid
+    conn.commit()
+    return ids
+
+
+def test_storage_places_migration_turns_old_values_into_places(db_config, migrated):
+    migrations = migrate.discover(MIGRATIONS)
+    by_version = {m.version: m for m in migrations}
+    conn = connect(db_config)
+    try:
+        assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
+        ids = _legacy_items(conn, [
+            ("full", "Attic", "3", "Top"),
+            ("full twin", "attic", "3", "Top"),     # different case: same places
+            ("tub only", "Attic", "3", None),
+            ("tray no tub", "Attic", None, "B"),
+            ("no location", None, "9", "A"),
+            ("tray alone", None, None, "Z"),
+            ("location only", "Basement", None, None),
+            ("nowhere", None, None, None),
+        ])
+        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places"]
+        repo = MySQLRepository(conn)
+        from app.places import PlaceTree
+
+        tree = PlaceTree(repo.list_places())
+        rows = {r["id"]: r for r in repo.list_items(filters())[0]}
+
+        def path(name):
+            return tree.path_text(rows[ids[name]]["storage_place_id"])
+
+        assert path("full") == "Attic › Tub 3 › Tray Top"
+        assert rows[ids["full"]]["storage_place_id"] == rows[ids["full twin"]]["storage_place_id"]
+        assert path("tub only") == "Attic › Tub 3"
+        assert path("tray no tub") == "Attic › Tray B"
+        assert path("no location") == "Tub 9 › Tray A"
+        assert path("tray alone") == "Tray Z"
+        assert path("location only") == "Basement"
+        assert rows[ids["nowhere"]]["storage_place_id"] is None
+        # Attic, Attic › Tub 3, … › Tray Top, Attic › Tray B, Tub 9, Tub 9 › Tray A, Tray Z, Basement
+        assert len(tree) == 8
+        # the old values themselves are untouched
+        assert (rows[ids["full twin"]]["storage_location"], rows[ids["no location"]]["storage_tub"]) == ("attic", "9")
+
+        # Re-running the SQL changes nothing, even after a piece has been moved since.
+        repo.update_item(ids["full"], {**item(name="full"), "storage_place_id": rows[ids["tray alone"]]["storage_place_id"]})
+        migrate._execute_all(conn, migrate.split_statements(by_version["0009_storage_places"].up_path.read_text()))
+        conn.commit()
+        assert len(PlaceTree(repo.list_places())) == 8
+        assert repo.get_item(ids["full"])["storage_place_id"] == rows[ids["tray alone"]]["storage_place_id"]
+
+        # Rolling back leaves Location / Tub / Tray as the app last kept them.
+        assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
+        with conn.cursor() as cur:
+            cur.execute("SELECT storage_location, storage_tub, storage_tray FROM items WHERE id = %s", (ids["full"],))
+            # the place's name; "Tray" is its type
+            assert cur.fetchone() == {"storage_location": "Z", "storage_tub": None, "storage_tray": None}
+        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places"]
+    finally:
+        migrate.migrate_up(conn, migrations)  # back to the latest schema even if an assertion failed
+        _truncate_all(conn)
+        conn.close()
+
+
+def _place(repo, name, parent=None, kind=None, display=False):
+    place_id = repo.create_place({"parent_id": parent, "name": name, "kind": kind, "is_display": display,
+                                  "notes": None})
+    assert place_id
+    return place_id
+
+
+def test_places_crud_keep_old_columns_in_step(repo):
+    from app.repository import DuplicatePlace
+
+    garage = _place(repo, "Garage")
+    attic = _place(repo, "Attic")
+    cabinet = _place(repo, "2", garage, "Cabinet")
+    drawer = _place(repo, "3", cabinet, "Drawer")
+    spot = _place(repo, "B", drawer, "Spot")
+    assert repo.create_place({"parent_id": 999_999, "name": "x", "kind": None, "is_display": False,
+                              "notes": None}) is None
+    with pytest.raises(DuplicatePlace):
+        _place(repo, "garage")  # names are compared without case
+    _place(repo, "Garage", attic)  # the same name in another place is fine
+
+    item_id = repo.create_item({**item(), "storage_place_id": spot})
+    row = repo.get_item(item_id)
+    assert (row["storage_location"], row["storage_tub"], row["storage_tray"]) == ("Garage", "2", "3")
+
+    # renaming or moving a place updates every piece inside it
+    assert repo.update_place(cabinet, {"parent_id": attic, "name": "7", "kind": "Cabinet",
+                                       "is_display": False, "notes": None}) is None
+    row = repo.get_item(item_id)
+    assert (row["storage_location"], row["storage_tub"], row["storage_tray"]) == ("Attic", "7", "3")
+    assert row["version"] == 1  # not an edit of the piece itself
+    assert "inside itself" in repo.update_place(cabinet, {"parent_id": spot, "name": "7", "kind": None,
+                                                          "is_display": False, "notes": None})
+    assert repo.update_place(999_999, {"parent_id": None, "name": "x"}) == "missing"
+    with pytest.raises(DuplicatePlace):
+        repo.update_place(attic, {"parent_id": None, "name": "Garage", "kind": None, "is_display": False,
+                                  "notes": None})
+
+    counts = {p["id"]: p for p in repo.list_places()}
+    assert counts[spot]["items"] == 1 and counts[drawer]["items"] == 0
+
+    # only empty places can be deleted; the foreign keys back that up
+    assert "empty" in repo.delete_place(spot)
+    assert "empty" in repo.delete_place(drawer)
+    repo.update_item(item_id, item())
+    assert repo.get_item(item_id)["storage_location"] is None
+    assert repo.delete_place(spot) is None
+    assert repo.delete_place(spot) == "missing"
+    with pytest.raises(Exception):
+        repo.create_item({**item(), "storage_place_id": 999_999})
+
+
+def test_place_filter_contents_extras_and_snapshot(repo):
+    garage = _place(repo, "Garage")
+    tub = _place(repo, "1", garage, "Tub")
+    bin_ = _place(repo, "Cords", garage)
+    mantel = _place(repo, "Mantel", display=True)
+    a = repo.create_item({**item(name="A"), "storage_place_id": tub, "display_place_id": mantel})
+    b = repo.create_item({**item(name="B"), "storage_place_id": garage})
+    repo.create_item(item(name="C"))
+    extra = repo.add_extra(a, {**parse_extra_form({"description": "Cord"})[0], "storage_place_id": bin_})
+    assert repo.get_extra(a, extra)["storage_place_id"] == bin_
+
+    def names(**args):
+        return sorted(r["name"] for r in repo.list_items(filters(**args))[0])
+
+    assert names(place=str(garage)) == ["A", "B"]
+    assert names(place=str(tub)) == ["A"]
+    assert names(place="999999") == []
+    assert names(unstored="yes") == ["C"]
+    assert names(storage_tub="1") == ["A"]  # old links keep working
+    assert repo.count_unplaced() == 1
+
+    contents = repo.place_contents([garage, tub, bin_])
+    assert [r["name"] for r in contents["stored"]] == ["A", "B"]
+    assert [(e["description"], e["item_name"]) for e in contents["extras"]] == [("Cord", "A")]
+    assert [r["name"] for r in repo.place_contents([mantel])["displayed"]] == ["A"]
+    assert repo.place_contents([]) == {"stored": [], "displayed": [], "extras": []}
+
+    etag = repo.snapshot_etag()
+    snap = repo.snapshot()
+    assert {p["id"] for p in snap["places"]} == {garage, tub, bin_, mantel}
+    repo.update_place(bin_, {"parent_id": garage, "name": "Cord bin", "kind": None, "is_display": False,
+                             "notes": None})
+    assert repo.snapshot_etag() != etag
+    assert {p["id"] for p in repo.export_data()["places"]} == {garage, tub, bin_, mantel}
+    assert "empty" in repo.delete_place(mantel)  # still some piece's display spot
+    # a place in use keeps its role
+    assert "display spot" in repo.update_place(tub, {"parent_id": garage, "name": "1", "kind": "Tub",
+                                                     "is_display": True, "notes": None})
+    assert "display spot" in repo.update_place(mantel, {"parent_id": None, "name": "Mantel", "kind": None,
+                                                        "is_display": False, "notes": None})
+    assert repo.update_place(bin_, {"parent_id": garage, "name": "Cord bin", "kind": None, "is_display": False,
+                                    "notes": "Under the bench"}) is None  # unchanged role: fine
+
+
+def test_old_phone_values_find_or_create_places(repo):
+    attic = _place(repo, "Attic")
+    tub = _place(repo, "3", attic, "Tub")
+    data = item(storage_location="Attic", storage_tub="3")
+    data = {**data, "storage_location": "Attic", "storage_tub": "3", "_legacy_storage": True}
+    item_id, created = repo.create_item_from_client(data, "11111111-1111-4111-8111-111111111111")
+    assert created and repo.get_item(item_id)["storage_place_id"] == tub
+
+    def resolve(row):
+        return "ok", {**item(), "storage_location": "Attic", "storage_tub": "4", "storage_tray": "Top",
+                      "_legacy_storage": True}
+
+    status, _payload, row = repo.patch_item(item_id, resolve)
+    assert status == "ok"
+    from app.places import PlaceTree
+
+    tree = PlaceTree(repo.list_places())
+    assert tree.path_text(row["storage_place_id"]) == "Attic › Tub 4 › Tray Top"
+    assert (row["storage_tub"], row["storage_tray"]) == ("4", "Top")

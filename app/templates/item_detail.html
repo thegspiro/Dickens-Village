@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_gallery.html" import gallery %}
-{% from "_macros.html" import condition_badge, storage_text, text, select, field_error, dims %}
+{% from "_macros.html" import condition_badge, storage_text, text, select, field_error, dims, place_select %}
 {% block title %}{{ item.name }}{% endblock %}
 {% block content %}
 <div class="title-row">
@@ -36,7 +36,8 @@
       {% if item.box_height_in or item.box_width_in or item.box_depth_in %}
       <dt>Box size</dt><dd>{{ dims(item.box_height_in, item.box_width_in, item.box_depth_in) }}</dd>
       {% endif %}
-      <dt>Storage</dt><dd>{{ storage_text(item) }}{% if item.on_display %} <span class="badge">On display</span>{% endif %}</dd>
+      <dt>Stored in</dt><dd>{% if item.storage_place_id %}<a href="{{ url_for('main.place_detail', place_id=item.storage_place_id) }}">{{ place_path(item.storage_place_id) }}</a>{% else %}<span class="muted">Not assigned</span>{% endif %}{% if item.on_display %} <span class="badge">On display</span>{% endif %}</dd>
+      {% if item.display_place_id %}<dt>Display spot</dt><dd><a href="{{ url_for('main.place_detail', place_id=item.display_place_id) }}">{{ place_path(item.display_place_id) }}</a></dd>{% endif %}
       <dt>Purchased</dt><dd>{{ item.purchase_date | nicedate or '—' }}{% if item.purchased_from %} from {{ item.purchased_from }}{% endif %}</dd>
       <dt>Price paid</dt><dd>{{ item.price_paid | money or '—' }}</dd>
       <dt>Estimated value</dt><dd>{{ item.estimated_value | money or '—' }}</dd>
@@ -110,13 +111,14 @@
   {% if extras %}
   <div class="table-wrap">
   <table class="responsive">
-    <thead><tr><th>Extra</th><th class="num">Qty</th><th>Condition</th><th>Notes</th><th></th></tr></thead>
+    <thead><tr><th>Extra</th><th class="num">Qty</th><th>Condition</th><th>Stored</th><th>Notes</th><th></th></tr></thead>
     <tbody>
     {% for e in extras %}
       <tr>
         <td class="primary">{{ e.description }}</td>
         <td data-label="Qty" class="num">{{ e.quantity }}</td>
         <td data-label="Condition">{{ condition_badge(e.condition_grade) }}</td>
+        <td data-label="Stored">{% if e.storage_place_id %}<a href="{{ url_for('main.place_detail', place_id=e.storage_place_id) }}">{{ place_path(e.storage_place_id) }}</a>{% else %}<span class="muted">With the piece</span>{% endif %}</td>
         <td data-label="Notes">{{ e.notes or '' }}</td>
         <td class="row-actions">
           <a href="{{ url_for('main.extra_edit', item_id=item.id, extra_id=e.id) }}">Edit</a>
@@ -141,6 +143,7 @@
       <div>{{ text(extra_form, extra_errors, 'quantity', 'Quantity', 3, extra='inputmode="numeric" placeholder="1"') }}</div>
       <div>{{ select(extra_form, extra_errors, 'condition_grade', 'Condition', CONDITIONS, blank='Not graded') }}</div>
       <div class="wide">{{ text(extra_form, extra_errors, 'notes', 'Notes', 1000) }}</div>
+      <div class="wide">{{ place_select(extra_form, extra_errors, 'storage_place_id', 'Stored in', place_options(False), 'With the piece') }}</div>
     </div>
     <button type="submit">Add extra</button>
   </form>

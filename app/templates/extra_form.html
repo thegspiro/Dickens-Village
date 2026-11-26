@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import text, select %}
+{% from "_macros.html" import text, select, place_select %}
 {% block title %}Edit extra{% endblock %}
 {% block content %}
 <section class="card narrow">
@@ -19,6 +19,7 @@
     {{ text(form, errors, 'quantity', 'Quantity', 3, extra='inputmode="numeric"') }}
     {{ select(form, errors, 'condition_grade', 'Condition', CONDITIONS, blank='Not graded') }}
     {{ text(form, errors, 'notes', 'Notes', 1000) }}
+    {{ place_select(form, errors, 'storage_place_id', 'Stored in', place_options(False), 'With the piece', hint='Leave as “With the piece” if it is packed with it.') }}
     <button type="submit">Save</button>
     <a href="{{ url_for('main.item_detail', item_id=item.id) }}#extras">Cancel</a>
   </form>
