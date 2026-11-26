@@ -65,11 +65,13 @@ def test_pages_link_manifest_icons_and_script(logged_in):
 
 def test_tables_have_phone_labels(logged_in, fake_repo):
     from tests.conftest import csrf
-    logged_in.post("/items/new", data={"category": "building", "name": "Mill", "storage_tub": "3",
+    from tests.conftest import add_place
+    tub = add_place(fake_repo, "Tub 3")
+    logged_in.post("/items/new", data={"category": "building", "name": "Mill", "storage_place_id": str(tub),
                                        "csrf_token": csrf(logged_in)})
     body = logged_in.get("/items").get_data(as_text=True)
     assert 'class="responsive"' in body and 'data-label="Storage"' in body and 'class="primary"' in body
-    assert 'data-label="Tub"' in logged_in.get("/storage").get_data(as_text=True)
+    assert 'data-label="Category"' in logged_in.get(f"/places/{tub}").get_data(as_text=True)
 
 
 def test_photo_forms_offer_camera(logged_in, fake_repo):

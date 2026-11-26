@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import text, select, checkbox, datalist, field_error %}
+{% from "_macros.html" import text, select, checkbox, datalist, field_error, place_select %}
 {% block title %}{{ 'Edit ' ~ item.name if item else 'Add a piece' }}{% endblock %}
 {% block content %}
 <h1>{{ 'Edit “' ~ item.name ~ '”' if item else 'Add a piece' }}</h1>
@@ -67,11 +67,11 @@
   <fieldset>
     <legend>Storage</legend>
     <div class="grid">
-      <div>{{ text(form, errors, 'storage_location', 'Location', 120, list='dl-location', hint='Where the tub is kept, e.g. Basement shelf 2') }}</div>
-      <div>{{ text(form, errors, 'storage_tub', 'Tub', 60, list='dl-tub') }}</div>
-      <div>{{ text(form, errors, 'storage_tray', 'Tray', 60, list='dl-tray') }}</div>
+      <div class="wide">{{ place_select(form, errors, 'storage_place_id', 'Stored in', place_options(False), 'Not assigned', hint='Where it goes when it is put away.') }}</div>
+      <div class="wide">{{ place_select(form, errors, 'display_place_id', 'Display spot', place_options(True), 'None', hint='Where it goes when it is put out.') }}</div>
       <div class="checks">{{ checkbox(form, 'on_display', 'Currently on display') }}</div>
     </div>
+    <p class="hint"><a href="{{ url_for('main.storage') }}">Add or change storage places and display spots</a></p>
   </fieldset>
 
   <fieldset>
@@ -106,9 +106,6 @@
   </fieldset>
 
   {{ datalist('dl-series', suggestions.series) }}
-  {{ datalist('dl-location', suggestions.storage_location) }}
-  {{ datalist('dl-tub', suggestions.storage_tub) }}
-  {{ datalist('dl-tray', suggestions.storage_tray) }}
 
   <button type="submit">{{ 'Save changes' if item else 'Add piece' }}</button>
   <a href="{{ url_for('main.item_detail', item_id=item.id) if item else url_for('main.item_list') }}">Cancel</a>

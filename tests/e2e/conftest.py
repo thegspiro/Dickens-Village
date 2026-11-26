@@ -131,10 +131,26 @@ def add_piece(page: Any, name: str, category: str = "building", **fields: str) -
         elif field in ("has_original_box", "has_sleeve", "on_display"):
             if value:
                 page.check(f"input[name={field}]")
+        elif field in ("storage_place_id", "display_place_id"):
+            page.select_option(f"#{field}", str(value))
         else:
             page.fill(f"#{field}", value)
     page.click('button:has-text("Add piece")')
     page.wait_for_url(re.compile(r"/items/\d+$"))
+    return int(page.url.rsplit("/", 1)[1])
+
+
+def add_place(page: Any, name: str, kind: str | None = None, parent: int | None = None,
+              display: bool = False) -> int:
+    """Add a storage place (or display spot) through the website; returns its id."""
+    page.goto(f"/places/new?parent={parent}" if parent else "/places/new")
+    page.fill("#name", name)
+    if kind:
+        page.fill("#kind", kind)
+    if display:
+        page.check("input[name=is_display]")
+    page.click('button:has-text("Add place")')
+    page.wait_for_url(re.compile(r"/places/\d+$"))
     return int(page.url.rsplit("/", 1)[1])
 
 

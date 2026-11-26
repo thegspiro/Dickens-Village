@@ -26,13 +26,20 @@ var LABELS = {
   year_introduced: "Year introduced", year_retired: "Year retired", condition_grade: "Condition",
   condition_checked_on: "Last checked", has_original_box: "Original box", has_sleeve: "Sleeve",
   condition_notes: "Condition notes", storage_location: "Location", storage_tub: "Tub", storage_tray: "Tray",
+  storage_place_id: "Stored in", display_place_id: "Display spot",
   on_display: "Currently on display", height_in: "Height", width_in: "Width", depth_in: "Depth",
   box_height_in: "Box height", box_width_in: "Box width", box_depth_in: "Box depth",
   purchase_date: "Purchase date", price_paid: "Price paid ($)", purchased_from: "Bought from",
   estimated_value: "Estimated value ($)", notes: "Notes", catalog_id: "Catalog link",
   description: "Description", quantity: "Quantity",
 };
-var NUMBER_FIELDS = ["year_introduced", "year_retired", "quantity", "catalog_id"];
+var NUMBER_FIELDS = ["year_introduced", "year_retired", "quantity", "catalog_id", "storage_place_id",
+  "display_place_id"];
+var places = m.placeTree([]);
+
+async function loadPlaces() {
+  places = m.placeTree(await db.getMeta("places", []));
+}
 var BOOL_FIELDS = ["has_original_box", "has_sleeve", "on_display"];
 
 /* ---- tiny DOM helper ---------------------------------------------------- */
@@ -86,11 +93,7 @@ function money(v) {
 }
 
 function storageText(v) {
-  var parts = [];
-  if (v.storage_location) parts.push(v.storage_location);
-  if (v.storage_tub) parts.push("Tub " + v.storage_tub);
-  if (v.storage_tray) parts.push("Tray " + v.storage_tray);
-  return parts.length ? parts.join(" › ") : "Not assigned";
+  return places.pathText(v.storage_place_id) || "Not assigned";
 }
 
 function dims(a, b, c) {
@@ -106,6 +109,7 @@ function displayValue(field, v) {
   if (BOOL_FIELDS.indexOf(field) !== -1) return v ? "Yes" : "No";
   if (field === "category") return choices.categories[v] || v;
   if (field === "condition_grade") return choices.conditions[v] || v;
+  if (field === "storage_place_id" || field === "display_place_id") return places.pathText(v) || "(a place not on this phone)";
   return String(v);
 }
 
@@ -182,12 +186,12 @@ async function listView(params) {
     var v = r.local;
     if (cat && v.category !== cat) return false;
     if (!q) return true;
-    return [v.name, v.item_number, v.series, v.storage_location, v.storage_tub, v.storage_tray]
+    return [v.name, v.item_number, v.series, places.pathText(v.storage_place_id)]
       .some(function (x) { return x && String(x).toLowerCase().indexOf(q) !== -1; });
   });
   var lastSync = await db.getMeta("lastSync", null);
 
-  var search = h("input", { type: "search", value: params.get("q") || "", placeholder: "Name, number, tub…",
+  var search = h("input", { type: "search", value: params.get("q") || "", placeholder: "Name, number, place…",
     "aria-label": "Search your pieces" });
   var catSel = h("select", { "aria-label": "Category" }, h("option", { value: "" }, "All categories"),
     Object.keys(choices.categories).map(function (k) {
@@ -289,7 +293,8 @@ async function pieceView(key) {
     ["Box / sleeve", (v.has_original_box ? "Original box" : "No box") + " · " + (v.has_sleeve ? "Sleeve" : "No sleeve")],
     (v.height_in || v.width_in || v.depth_in) ? ["Size", dims(v.height_in, v.width_in, v.depth_in)] : null,
     (v.box_height_in || v.box_width_in || v.box_depth_in) ? ["Box size", dims(v.box_height_in, v.box_width_in, v.box_depth_in)] : null,
-    ["Storage", storageText(v), v.on_display ? " · On display" : ""],
+    ["Stored in", storageText(v), v.on_display ? " · On display" : ""],
+    v.display_place_id ? ["Display spot", places.pathText(v.display_place_id)] : null,
     ["Purchased", v.purchase_date || "—", v.purchased_from ? " from " + v.purchased_from : ""],
     ["Price paid", money(v.price_paid)],
     ["Estimated value", money(v.estimated_value)],
@@ -325,7 +330,9 @@ async function pieceView(key) {
       extras.length ? h("ul", { class: "links" }, extras.map(function (e) {
         return h("li", null, h("a", { href: "#/piece/" + encodeURIComponent(key) + "/extra/" + encodeURIComponent(e.key) },
           e.local.description), " ", h("span", { class: "muted" }, "×" + (e.local.quantity || 1)), " ",
-          badge(e.local.condition_grade), " ", syncBadge(e));
+          badge(e.local.condition_grade), " ",
+          e.local.storage_place_id ? h("span", { class: "muted" }, places.pathText(e.local.storage_place_id)) : null,
+          " ", syncBadge(e));
       })) : h("p", { class: "muted" }, "No extras recorded."),
       h("a", { class: "button", href: "#/piece/" + encodeURIComponent(key) + "/extra/new" }, "Add extra")),
     h("section", { class: "card" },
@@ -453,8 +460,7 @@ var FORM = [
     ["year_introduced", "year"], ["year_retired", "year"]]],
   ["Current condition", [["condition_grade", "select-cond"], ["condition_checked_on", "date"],
     ["has_original_box", "check"], ["has_sleeve", "check"], ["condition_notes", "textarea"]]],
-  ["Storage", [["storage_location", "text", false, "dl-location"], ["storage_tub", "text", false, "dl-tub"],
-    ["storage_tray", "text", false, "dl-tray"], ["on_display", "check"]]],
+  ["Storage", [["storage_place_id", "select-place"], ["display_place_id", "select-display"], ["on_display", "check"]]],
   ["Measurements (inches)", [["height_in", "text"], ["width_in", "text"], ["depth_in", "text"],
     ["box_height_in", "text"], ["box_width_in", "text"], ["box_depth_in", "text"]]],
   ["Purchase and value", [["purchase_date", "date"], ["price_paid", "decimal"], ["purchased_from", "text"],
@@ -470,7 +476,14 @@ function field(spec, values, errors) {
   if (kind === "check") {
     return h("label", { class: "check" }, h("input", { type: "checkbox", id: id, name: name, checked: Boolean(v) }), " ", LABELS[name]);
   }
-  if (kind === "select-cat" || kind === "select-cond") {
+  if (kind === "select-place" || kind === "select-display" || kind === "select-extra-place") {
+    var opts = places.options(kind === "select-display");
+    var known = v == null || opts.some(function (o) { return o.id === Number(v); });
+    input = h("select", { id: id, name: name },
+      h("option", { value: "" }, kind === "select-display" ? "None" : kind === "select-extra-place" ? "With the piece" : "Not assigned"),
+      known ? null : h("option", { value: String(v), selected: true }, "(a place not on this phone yet)"),
+      opts.map(function (o) { return h("option", { value: String(o.id), selected: Number(v) === o.id }, o.text); }));
+  } else if (kind === "select-cat" || kind === "select-cond") {
     var opts = kind === "select-cat" ? choices.categories : choices.conditions;
     input = h("select", { id: id, name: name, required: required },
       h("option", { value: "" }, kind === "select-cat" ? "Choose…" : "Not graded"),
@@ -513,18 +526,6 @@ function validate(values, fields) {
   });
   if (fields.indexOf("description") !== -1 && !values.description) errors.description = "Describe the extra piece.";
   return errors;
-}
-
-async function suggestions() {
-  var items = await db.all("items");
-  function distinct(f) {
-    var s = {};
-    items.forEach(function (r) { if (r.local[f]) s[r.local[f]] = true; });
-    return Object.keys(s).sort();
-  }
-  return ["storage_location", "storage_tub", "storage_tray"].map(function (f) {
-    return h("datalist", { id: "dl-" + f.replace("storage_", "") }, distinct(f).map(function (x) { return h("option", { value: x }); }));
-  });
 }
 
 async function editView(key) {
@@ -611,7 +612,8 @@ async function editView(key) {
     location.hash = "#/piece/" + encodeURIComponent(saved.key);
     syncSoon();
   });
-  return [h("h1", null, rec ? "Edit “" + (rec.local.name || "") + "”" : "Add a piece"), form, await suggestions()];
+  return [h("h1", null, rec ? "Edit “" + (rec.local.name || "") + "”" : "Add a piece"), form,
+    h("p", { class: "hint" }, "New storage places and display spots are added on the full site (Storage).")];
 }
 
 /* ---- extras --------------------------------------------------------------- */
@@ -631,6 +633,7 @@ async function extraView(itemKey, extraKey) {
       field(["quantity", "year"], values, errors),
       field(["condition_grade", "select-cond"], values, errors),
       field(["notes", "text"], values, errors),
+      field(["storage_place_id", "select-extra-place"], values, errors),
       h("button", { type: "submit" }, rec ? "Save" : "Add extra"), " ",
       h("a", { href: "#/piece/" + encodeURIComponent(itemKey) }, "Cancel"),
     ]);
@@ -792,6 +795,7 @@ async function route(options) {
   }
   var view;
   try {
+    await loadPlaces();
     if (!parts.length) view = await listView(params);
     else if (parts[0] === "new") view = await editView(null);
     else if (parts[0] === "edit" && parts[1]) view = await editView(parts[1]);

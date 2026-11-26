@@ -26,8 +26,16 @@ from .sync import (
     item_to_json,
     json_to_form,
     merge,
+    place_to_json,
 )
-from .validation import ITEM_COLUMNS, parse_extra_form, parse_item_form, parse_positive_int
+from .validation import (
+    ITEM_COLUMNS,
+    PLACE_FIELDS,
+    STORAGE_COLUMNS,
+    parse_extra_form,
+    parse_item_form,
+    parse_positive_int,
+)
 
 log = logging.getLogger("dickens.api")
 
@@ -155,7 +163,8 @@ def snapshot() -> Any:
         item["photos"] = photo_map.get(row["id"], [])
         item["scans"] = scan_map.get(row["id"], [])
         items.append(item)
-    return _with_etag({"etag": etag, "items": items}, etag)
+    places = [place_to_json(row) for row in data.get("places", [])]
+    return _with_etag({"etag": etag, "items": items, "places": places}, etag)
 
 
 @api.get("/catalog")
@@ -174,13 +183,37 @@ def catalog() -> Any:
 # -- pieces ------------------------------------------------------------------------
 
 
-def _validate_item(values: dict[str, Any], check_catalog: bool = True) -> tuple[dict[str, Any], dict[str, str]]:
-    from .views import _check_catalog_link
+def _validate_item(values: dict[str, Any], check_links: bool = True,
+                   legacy_storage: bool = False) -> tuple[dict[str, Any], dict[str, str]]:
+    """Validate piece fields. check_links also checks that the catalog entry and
+    places exist; it reads the database, so it can't run under a row lock."""
+    from .views import _check_catalog_link, _check_places
 
-    data, errors = parse_item_form(json_to_form(values))
-    if check_catalog:
+    data, errors = parse_item_form(json_to_form(values), legacy_storage=legacy_storage)
+    if check_links:
         _check_catalog_link(data, errors)
+        _check_places(data, errors, PLACE_FIELDS)
     return data, errors
+
+
+def _sends_legacy_storage(fields: dict[str, Any]) -> bool:
+    """An older phone app sends Location / Tub / Tray instead of a storage place."""
+    return "storage_place_id" not in fields and any(c in fields for c in STORAGE_COLUMNS)
+
+
+def _changed_places_problem(changes: dict[str, Any], keys: tuple[str, ...]) -> dict[str, str]:
+    """Errors for places in changes that don't exist or are the wrong kind (checked before the row lock)."""
+    from .views import _check_places
+
+    data: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for key in keys:
+        if changes.get(key) not in (None, ""):
+            data[key] = parse_positive_int(str(changes[key]))
+            if data[key] is None:
+                errors[key] = "Choose a place from the list."
+    _check_places(data, errors, tuple(k for k in data if data[k] is not None))
+    return errors
 
 
 @api.post("/items")
@@ -195,9 +228,12 @@ def create_item() -> Any:
     existing = repo.get_item_by_client_uuid(client_uuid)
     if existing:  # a retried upload: answer as if it just succeeded
         return _ok({"item": item_to_json(existing), "created": False})
-    data, errors = _validate_item(fields)
+    legacy = _sends_legacy_storage(fields)
+    data, errors = _validate_item(fields, legacy_storage=legacy)
     if errors:
         return _error(422, "Some fields are not valid.", errors=errors)
+    if legacy:
+        data["_legacy_storage"] = True
     item_id, created = repo.create_item_from_client(data, client_uuid)
     row = repo.get_item(item_id)
     return _ok({"item": item_to_json(row), "created": created}, 201 if created else 200)
@@ -213,6 +249,10 @@ def patch_item(item_id: int) -> Any:
         if catalog_id is None or _repo().get_catalog_item(catalog_id) is None:
             return _error(422, "Some fields are not valid.",
                           errors={"catalog_id": "That catalog entry no longer exists; pick the piece again."})
+    place_errors = _changed_places_problem(changes, PLACE_FIELDS)
+    if place_errors:
+        return _error(422, "Some fields are not valid.", errors=place_errors)
+    legacy = _sends_legacy_storage(changes)
 
     def resolve(row: dict[str, Any]) -> tuple[str, Any]:
         # Runs inside the repository's transaction: no other database calls here.
@@ -220,9 +260,14 @@ def patch_item(item_id: int) -> Any:
         merged, conflicts = merge(current, base, changes)
         if conflicts:
             return "conflict", conflicts
-        data, errors = _validate_item({k: merged[k] for k in ITEM_COLUMNS}, check_catalog=False)
+        data, errors = _validate_item({k: merged[k] for k in ITEM_COLUMNS}, check_links=False,
+                                      legacy_storage=legacy)
         if errors:
             return "invalid", errors
+        # Move the piece only if the old-style values really changed: a piece in a
+        # place deeper than three levels must stay where it is.
+        if legacy and tuple(data[c] for c in STORAGE_COLUMNS) != tuple(row.get(c) for c in STORAGE_COLUMNS):
+            data["_legacy_storage"] = True
         return "ok", data
 
     status, payload, row = _repo().patch_item(item_id, resolve)
@@ -247,7 +292,10 @@ def create_extra(item_id: int) -> Any:
     fields = body.get("fields")
     if not isinstance(fields, dict) or set(fields) - set(EXTRA_COLUMNS):
         raise SyncError('"fields" must be an object with extra fields only.')
+    from .views import _check_places
+
     data, errors = parse_extra_form(json_to_form(fields))
+    _check_places(data, errors, ("storage_place_id",))
     if errors:
         return _error(422, "Some fields are not valid.", errors=errors)
     repo = _repo()
@@ -264,6 +312,9 @@ def create_extra(item_id: int) -> Any:
 @api_login_required
 def patch_extra(item_id: int, extra_id: int) -> Any:
     base, changes = clean_changes(_json_body(), EXTRA_COLUMNS)
+    place_errors = _changed_places_problem(changes, ("storage_place_id",))
+    if place_errors:
+        return _error(422, "Some fields are not valid.", errors=place_errors)
 
     def resolve(row: dict[str, Any]) -> tuple[str, Any]:
         current = extra_to_json(row)

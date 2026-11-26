@@ -25,7 +25,7 @@ from .validation import ITEM_BOOL_FIELDS, ITEM_COLUMNS, MEASUREMENT_FIELDS, form
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-EXTRA_COLUMNS = ("description", "quantity", "condition_grade", "notes")
+EXTRA_COLUMNS = ("description", "quantity", "condition_grade", "notes", "storage_place_id")
 MONEY_FIELDS = ("price_paid", "estimated_value")
 
 
@@ -66,6 +66,16 @@ def extra_to_json(row: Mapping[str, Any]) -> dict[str, Any]:
         "client_uuid": row.get("client_uuid"),
     })
     return out
+
+
+def place_to_json(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "parent_id": row.get("parent_id"),
+        "name": row["name"],
+        "kind": row.get("kind"),
+        "is_display": bool(row.get("is_display")),
+    }
 
 
 def json_to_form(values: Mapping[str, Any]) -> dict[str, str]:

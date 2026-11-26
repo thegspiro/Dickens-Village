@@ -1,4 +1,4 @@
-from tests.conftest import csrf, png_bytes
+from tests.conftest import add_place, csrf, png_bytes
 
 
 def add_item(client, **fields):
@@ -10,12 +10,17 @@ def add_item(client, **fields):
 
 
 def test_create_item_with_storage_and_condition(logged_in, fake_repo):
+    shelf = add_place(fake_repo, "Basement shelf 2")
+    tub = add_place(fake_repo, "3", parent=shelf, kind="Tub")
+    tray = add_place(fake_repo, "Top", parent=tub, kind="Tray")
     item_id = add_item(
-        logged_in, storage_location="Basement shelf 2", storage_tub="3", storage_tray="Top",
+        logged_in, storage_place_id=str(tray),
         condition_grade="good", condition_checked_on="2026-11-01", condition_notes="Small chip on chimney",
         price_paid="45", has_original_box="1",
     )
     item = fake_repo.items[item_id]
+    assert item["storage_place_id"] == tray
+    # the old columns follow the place, for exports and older phone apps
     assert (item["storage_location"], item["storage_tub"], item["storage_tray"]) == ("Basement shelf 2", "3", "Top")
     page = logged_in.get(f"/items/{item_id}").get_data(as_text=True)
     assert "Basement shelf 2 › Tub 3 › Tray Top" in page
@@ -44,13 +49,16 @@ def test_user_input_is_escaped(logged_in):
 
 
 def test_edit_item_prefills_and_saves(logged_in, fake_repo):
-    item_id = add_item(logged_in, price_paid="12.5", storage_tub="1")
+    one, four = add_place(fake_repo, "Tub 1"), add_place(fake_repo, "Tub 4")
+    item_id = add_item(logged_in, price_paid="12.5", storage_place_id=str(one))
     body = logged_in.get(f"/items/{item_id}/edit").get_data(as_text=True)
-    assert 'value="12.50"' in body and 'value="1"' in body
+    assert 'value="12.50"' in body and f'<option value="{one}" selected>Tub 1</option>' in body
     resp = logged_in.post(f"/items/{item_id}/edit", data={
-        "category": "building", "name": "Fezziwig's Warehouse", "storage_tub": "4", "csrf_token": csrf(logged_in)})
+        "category": "building", "name": "Fezziwig's Warehouse", "storage_place_id": str(four),
+        "csrf_token": csrf(logged_in)})
     assert resp.status_code == 302
-    assert fake_repo.items[item_id]["storage_tub"] == "4"
+    assert fake_repo.items[item_id]["storage_place_id"] == four
+    assert fake_repo.items[item_id]["storage_location"] == "Tub 4"
     assert fake_repo.items[item_id]["price_paid"] is None  # cleared field is saved as NULL
 
 
@@ -119,28 +127,33 @@ def test_links_between_building_and_figure(logged_in, fake_repo):
     assert resp.status_code == 302 and fake_repo.links == set()
 
 
-def test_list_filters_by_tub(logged_in):
-    add_item(logged_in, name="In tub 1", storage_tub="1")
-    add_item(logged_in, name="In tub 2", storage_tub="2")
-    logged_in.get("/items")  # consume the "Added …" flash message
-    body = logged_in.get("/items?storage_tub=1").get_data(as_text=True)
-    assert "In tub 1" in body and "In tub 2" not in body
-
-
-def test_storage_page_links_to_filtered_list(logged_in):
-    add_item(logged_in, storage_location="Attic", storage_tub="7", storage_tray="B")
+def test_list_filters_by_place_including_places_inside(logged_in, fake_repo):
+    attic = add_place(fake_repo, "Attic")
+    tub1 = add_place(fake_repo, "1", parent=attic, kind="Tub")
+    tub2 = add_place(fake_repo, "2", parent=attic, kind="Tub")
+    add_item(logged_in, name="In tub 1", storage_place_id=str(tub1))
+    add_item(logged_in, name="In tub 2", storage_place_id=str(tub2))
     add_item(logged_in, name="Loose piece")
-    body = logged_in.get("/storage").get_data(as_text=True)
-    assert "storage_location=Attic&amp;storage_tub=7&amp;storage_tray=B" in body
-    assert "unstored=yes" in body
+    logged_in.get("/items")  # consume the "Added …" flash message
+    body = logged_in.get(f"/items?place={tub1}").get_data(as_text=True)
+    assert "In tub 1" in body and "In tub 2" not in body
+    body = logged_in.get(f"/items?place={attic}").get_data(as_text=True)
+    assert "In tub 1" in body and "In tub 2" in body and "Loose piece" not in body
+    body = logged_in.get("/items?unstored=yes").get_data(as_text=True)
+    assert "Loose piece" in body and "In tub 1" not in body
 
 
-def test_storage_exact_match_excludes_deeper_levels(logged_in):
-    add_item(logged_in, name="Loose on shelf", storage_location="Attic")
-    add_item(logged_in, name="Packed in tub", storage_location="Attic", storage_tub="7")
+def test_old_location_tub_tray_links_still_filter(logged_in, fake_repo):
+    attic = add_place(fake_repo, "Attic")
+    tub7 = add_place(fake_repo, "7", parent=attic, kind="Tub")
+    add_item(logged_in, name="Loose on shelf", storage_place_id=str(attic))
+    add_item(logged_in, name="Packed in tub", storage_place_id=str(tub7))
     logged_in.get("/items")
+    body = logged_in.get("/items?storage_tub=7").get_data(as_text=True)
+    assert "Packed in tub" in body and "Loose on shelf" not in body
     body = logged_in.get("/items?storage_location=Attic&exact_storage=yes").get_data(as_text=True)
     assert "Loose on shelf" in body and "Packed in tub" not in body
+    assert 'name="storage_location" value="Attic"' in body  # kept when the filters are changed
 
 
 def test_summary_renders(logged_in):
@@ -229,18 +242,21 @@ def test_repo_closed_after_request(logged_in, fake_repo):
 
 
 def test_edit_form_detects_change_made_elsewhere(logged_in, fake_repo):
-    item_id = add_item(logged_in, storage_tub="1", condition_grade="good")
+    garage = add_place(fake_repo, "Garage")
+    tub1 = add_place(fake_repo, "1", parent=garage, kind="Tub")
+    tub7 = add_place(fake_repo, "7", parent=garage, kind="Tub")
+    item_id = add_item(logged_in, storage_place_id=str(tub1), condition_grade="good")
     page = logged_in.get(f"/items/{item_id}/edit").get_data(as_text=True)
     assert 'name="version" value="1"' in page
     # the phone syncs a change while the edit page is open
-    fake_repo.items[item_id]["storage_tub"] = "7"
-    fake_repo.items[item_id]["version"] = 2
-    form = {"category": "building", "name": "Fezziwig's Warehouse", "storage_tub": "1",
+    fake_repo.items[item_id].update(storage_place_id=tub7, storage_tub="7", version=2)
+    form = {"category": "building", "name": "Fezziwig's Warehouse", "storage_place_id": str(tub1),
             "condition_grade": "fair", "version": "1", "csrf_token": csrf(logged_in)}
     resp = logged_in.post(f"/items/{item_id}/edit", data=form)
     body = resp.get_data(as_text=True)
     assert resp.status_code == 409 and "changed somewhere else" in body
-    assert "Tub: <strong>7</strong>" in body
+    assert "Storage place: <strong>Garage › Tub 7</strong>" in body
+    assert "Tub:" not in body  # the old columns follow the place and aren't listed
     assert fake_repo.items[item_id]["condition_grade"] == "good"  # nothing saved
     assert 'name="version" value="2"' in body  # saving again is a deliberate overwrite
     form["version"] = "2"
@@ -275,14 +291,16 @@ def _save_elsewhere_first(monkeypatch, fake_repo, method, rows, row_id, change):
 
 
 def test_edit_does_not_overwrite_a_save_that_lands_during_the_request(logged_in, fake_repo, monkeypatch):
-    item_id = add_item(logged_in, storage_tub="1", condition_grade="good")
-    _save_elsewhere_first(monkeypatch, fake_repo, "update_item", fake_repo.items, item_id, {"storage_tub": "7"})
-    form = {"category": "building", "name": "Fezziwig's Warehouse", "storage_tub": "1",
+    tub1, tub7 = add_place(fake_repo, "Tub 1"), add_place(fake_repo, "Tub 7")
+    item_id = add_item(logged_in, storage_place_id=str(tub1), condition_grade="good")
+    _save_elsewhere_first(monkeypatch, fake_repo, "update_item", fake_repo.items, item_id,
+                          {"storage_place_id": tub7})
+    form = {"category": "building", "name": "Fezziwig's Warehouse", "storage_place_id": str(tub1),
             "condition_grade": "fair", "version": "1", "csrf_token": csrf(logged_in)}
     resp = logged_in.post(f"/items/{item_id}/edit", data=form)
     body = resp.get_data(as_text=True)
-    assert resp.status_code == 409 and "Tub: <strong>7</strong>" in body
-    assert fake_repo.items[item_id]["storage_tub"] == "7"
+    assert resp.status_code == 409 and "Storage place: <strong>Tub 7</strong>" in body
+    assert fake_repo.items[item_id]["storage_place_id"] == tub7
     assert fake_repo.items[item_id]["condition_grade"] == "good"  # nothing from the form was saved
     assert 'name="version" value="2"' in body  # the next save is a deliberate overwrite
 

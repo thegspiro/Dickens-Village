@@ -15,7 +15,8 @@ from werkzeug.security import generate_password_hash
 
 from app import create_app
 from app.config import load_config
-from app.repository import VersionConflict
+from app.places import PlaceTree, legacy_path
+from app.repository import DuplicatePlace, VersionConflict
 from app.validation import STORAGE_COLUMNS
 
 ADMIN_USER = "gabriel"
@@ -32,6 +33,7 @@ class FakeRepository:
         self.catalog: dict[int, dict[str, Any]] = {}
         self.catalog_photos: dict[int, dict[str, Any]] = {}
         self.scans: dict[int, dict[str, Any]] = {}
+        self.places: dict[int, dict[str, Any]] = {}
         self._ids = itertools.count(1)
         self.closed = 0
 
@@ -80,7 +82,11 @@ class FakeRepository:
                 if not filters.get(col):
                     rows = [r for r in rows if not r.get(col)]
         if filters.get("unstored"):
-            rows = [r for r in rows if not any(r.get(c) for c in STORAGE_COLUMNS)]
+            rows = [r for r in rows if not r.get("storage_place_id")]
+        if filters.get("place"):
+            tree = self._tree()
+            ids = set(tree.descendants(filters["place"])) if filters["place"] in tree else set()
+            rows = [r for r in rows if r.get("storage_place_id") in ids]
         rows.sort(key=lambda r: (r["name"], r["id"]))
         return rows, len(rows)
 
@@ -88,7 +94,25 @@ class FakeRepository:
         item = self.items.get(item_id)
         return self._with_counts(item) if item else None
 
+    def _tree(self) -> PlaceTree:
+        return PlaceTree(self.places.values())
+
+    def _apply_storage(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Same rules as MySQLRepository._apply_storage."""
+        data = dict(data)
+        if data.pop("_legacy_storage", False):
+            parent = None
+            for name, kind in legacy_path(*(data.get(c) for c in STORAGE_COLUMNS)):
+                found = next((p["id"] for p in self.places.values()
+                              if p["parent_id"] == parent and p["name"].lower() == name.lower()), None)
+                parent = found or self.create_place({"parent_id": parent, "name": name, "kind": kind})
+            data["storage_place_id"] = parent
+        legacy = self._tree().legacy(data.get("storage_place_id"))
+        data.update(zip(STORAGE_COLUMNS, legacy))
+        return data
+
     def create_item(self, data: dict[str, Any]) -> int:
+        data = self._apply_storage(data)
         new_id = next(self._ids)
         now = dt.datetime(2026, 11, 19, 12, 0)
         self.items[new_id] = {**data, "id": new_id, "created_at": now, "updated_at": now, "version": 1,
@@ -100,7 +124,7 @@ class FakeRepository:
             return False
         if expected_version is not None and self.items[item_id]["version"] != expected_version:
             raise VersionConflict(item_id)
-        self.items[item_id].update(data)
+        self.items[item_id].update(self._apply_storage(data))
         self.items[item_id]["version"] += 1
         return True
 
@@ -133,13 +157,16 @@ class FakeRepository:
                             "caption": p.get("caption")}
                            for p in sorted(self.photos.values(),
                                            key=lambda p: (p["item_id"], p.get("sort_order", 0), p["id"]))],
-                "scans": [{"id": s["id"], "item_id": s["item_id"]} for s in self.scans.values()]}
+                "scans": [{"id": s["id"], "item_id": s["item_id"]} for s in self.scans.values()],
+                "places": [dict(p) for p in self.places.values()]}
 
     def snapshot_etag(self) -> str:
         return "/".join(str(x) for x in (
             len(self.items), sum(i["version"] for i in self.items.values()), max(self.items, default=0),
             len(self.extras), sum(e.get("version", 1) for e in self.extras.values()), max(self.extras, default=0),
-            len(self.photos), sum(self.photos), len(self.scans), sum(self.scans)))
+            len(self.photos), sum(self.photos), len(self.scans), sum(self.scans),
+            hash(tuple((p["id"], p["parent_id"], p["name"], p.get("kind"), p.get("is_display"))
+                       for p in self.places.values()))))
 
     def catalog_all(self) -> list[dict[str, Any]]:
         return [self._catalog_with_photos(r) for r in self.catalog.values()]
@@ -173,7 +200,8 @@ class FakeRepository:
         if item_id not in self.items:
             return None
         new_id = next(self._ids)
-        self.extras[new_id] = {**data, "id": new_id, "item_id": item_id, "version": 1, "client_uuid": None}
+        self.extras[new_id] = {"storage_place_id": None, **data, "id": new_id, "item_id": item_id, "version": 1,
+                               "client_uuid": None}
         return new_id
 
     def update_extra(self, item_id: int, extra_id: int, data: dict[str, Any],
@@ -384,12 +412,82 @@ class FakeRepository:
     def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
         return sorted((i for i in self.items.values() if i.get("catalog_id") == catalog_id), key=lambda i: i["name"])
 
-    def storage_summary(self) -> list[dict[str, Any]]:
-        counts: dict[tuple, int] = {}
-        for i in self.items.values():
-            key = tuple(i.get(c) for c in STORAGE_COLUMNS)
-            counts[key] = counts.get(key, 0) + 1
-        return [dict(zip(STORAGE_COLUMNS, k), item_count=n) for k, n in counts.items()]
+    def count_unplaced(self) -> int:
+        return sum(1 for i in self.items.values() if not i.get("storage_place_id"))
+
+    def list_places(self) -> list[dict[str, Any]]:
+        out = []
+        for p in self.places.values():
+            out.append({**p,
+                        "items": sum(1 for i in self.items.values() if i.get("storage_place_id") == p["id"]),
+                        "displayed": sum(1 for i in self.items.values() if i.get("display_place_id") == p["id"]),
+                        "extras": sum(1 for e in self.extras.values() if e.get("storage_place_id") == p["id"])})
+        return out
+
+    def get_place(self, place_id: int) -> dict[str, Any] | None:
+        p = self.places.get(place_id)
+        return dict(p) if p else None
+
+    def _name_taken(self, parent_id: int | None, name: str, except_id: int | None = None) -> bool:
+        return any(p["parent_id"] == parent_id and p["name"].lower() == name.lower() and p["id"] != except_id
+                   for p in self.places.values())
+
+    def create_place(self, data: dict[str, Any]) -> int | None:
+        if data.get("parent_id") is not None and data["parent_id"] not in self.places:
+            return None
+        if self._name_taken(data.get("parent_id"), data["name"]):
+            raise DuplicatePlace()
+        new_id = next(self._ids)
+        self.places[new_id] = {"id": new_id, "parent_id": data.get("parent_id"), "name": data["name"],
+                               "kind": data.get("kind"), "is_display": int(bool(data.get("is_display"))),
+                               "notes": data.get("notes")}
+        return new_id
+
+    def update_place(self, place_id: int, data: dict[str, Any]) -> str | None:
+        tree = self._tree()
+        if place_id not in tree:
+            return "missing"
+        problem = tree.move_problem(place_id, data.get("parent_id"))
+        if problem:
+            return problem
+        to_display = bool(data.get("is_display"))
+        if to_display != bool(self.places[place_id].get("is_display")):
+            if to_display and (any(i.get("storage_place_id") == place_id for i in self.items.values())
+                               or any(e.get("storage_place_id") == place_id for e in self.extras.values())):
+                return "Pieces or extras are stored here. Move them before making this a display spot."
+            if not to_display and any(i.get("display_place_id") == place_id for i in self.items.values()):
+                return "Pieces have this as their display spot. Change theirs before making it a storage place."
+        if self._name_taken(data.get("parent_id"), data["name"], except_id=place_id):
+            raise DuplicatePlace()
+        self.places[place_id].update({k: data.get(k) for k in ("parent_id", "name", "kind", "notes")},
+                                     is_display=int(bool(data.get("is_display"))))
+        tree = self._tree()
+        for item in self.items.values():
+            if item.get("storage_place_id") in tree.descendants(place_id):
+                item.update(zip(STORAGE_COLUMNS, tree.legacy(item["storage_place_id"])))
+        return None
+
+    def delete_place(self, place_id: int) -> str | None:
+        if place_id not in self.places:
+            return "missing"
+        used = (any(p["parent_id"] == place_id for p in self.places.values())
+                or any(place_id in (i.get("storage_place_id"), i.get("display_place_id")) for i in self.items.values())
+                or any(e.get("storage_place_id") == place_id for e in self.extras.values()))
+        if used:
+            return "Only an empty place can be deleted. Move what's in it first."
+        del self.places[place_id]
+        return None
+
+    def place_contents(self, place_ids: list[int]) -> dict[str, list[dict[str, Any]]]:
+        ids = set(place_ids)
+        by_name = lambda rows: sorted(rows, key=lambda r: (r["name"], r["id"]))  # noqa: E731
+        return {
+            "stored": by_name(dict(i) for i in self.items.values() if i.get("storage_place_id") in ids),
+            "displayed": by_name(dict(i) for i in self.items.values() if i.get("display_place_id") in ids),
+            "extras": [{**e, "item_name": self.items[e["item_id"]]["name"],
+                        "on_display": self.items[e["item_id"]]["on_display"]}
+                       for e in self.extras.values() if e.get("storage_place_id") in ids],
+        }
 
     def export_data(self) -> dict[str, list[dict[str, Any]]]:
         added = dt.datetime(2026, 11, 19, 12, 0)
@@ -406,6 +504,7 @@ class FakeRepository:
                            "name": self.catalog[p["catalog_id"]]["name"]}
                           for p in sorted(self.catalog_photos.values(), key=lambda p: (p["catalog_id"], p["id"]))]
         return {"items": items, "extras": sorted(self.extras.values(), key=lambda e: (e["item_id"], e["id"])),
+                "places": [dict(p) for p in sorted(self.places.values(), key=lambda p: p["id"])],
                 "links": [{"building_id": b, "item_id": i} for b, i in sorted(self.links)],
                 "photos": photos, "scans": scans, "catalog_photos": catalog_photos}
 
@@ -416,6 +515,13 @@ class FakeRepository:
             "totals": {"item_count": len(self.items), "total_paid": 0, "total_value": 0,
                        "on_display": 0, "with_box": 0, "extras_count": len(self.extras)},
         }
+
+
+def add_place(repo: FakeRepository, name: str, parent: int | None = None, kind: str | None = None,
+              display: bool = False) -> int:
+    place_id = repo.create_place({"parent_id": parent, "name": name, "kind": kind, "is_display": display})
+    assert place_id is not None
+    return place_id
 
 
 def make_env(tmp_path: Any) -> dict[str, str]:

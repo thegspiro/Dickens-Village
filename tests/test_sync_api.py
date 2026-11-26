@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from app.sync import SyncError, clean_changes, item_to_json, merge, to_json_value
-from tests.conftest import csrf, png_bytes
+from tests.conftest import add_place, csrf, png_bytes
 
 
 # -- merge rules (pure) ------------------------------------------------------------
@@ -92,19 +92,30 @@ def test_session_lasts_30_days(app):
 # -- snapshot and catalog ----------------------------------------------------------
 
 def test_snapshot_shape_and_etag(logged_in, fake_repo):
-    add_piece(logged_in, storage_tub="3", price_paid="12.5", height_in="7 1/4", on_display="1")
+    attic = add_place(fake_repo, "Attic")
+    tub = add_place(fake_repo, "3", parent=attic, kind="Tub")
+    add_piece(logged_in, storage_place_id=str(tub), price_paid="12.5", height_in="7 1/4", on_display="1")
     item_id = next(iter(fake_repo.items))
     logged_in.post(f"/items/{item_id}/extras", data={"description": "Light cord", "csrf_token": csrf(logged_in)})
     resp = logged_in.get("/api/v1/snapshot")
     assert resp.status_code == 200 and resp.headers["ETag"]
-    (item,) = resp.get_json()["items"]
-    assert item["storage_tub"] == "3" and item["price_paid"] == "12.50" and item["height_in"] == "7.25"
+    body = resp.get_json()
+    (item,) = body["items"]
+    assert item["storage_place_id"] == tub and item["display_place_id"] is None
+    assert (item["storage_location"], item["storage_tub"]) == ("Attic", "3")  # kept for older phone apps
+    assert item["price_paid"] == "12.50" and item["height_in"] == "7.25"
     assert item["on_display"] is True and item["version"] == 1
-    assert item["extras"][0]["description"] == "Light cord" and item["photos"] == []
+    assert item["extras"][0]["description"] == "Light cord" and item["extras"][0]["storage_place_id"] is None
+    assert item["photos"] == []
+    assert {p["id"]: p for p in body["places"]}[tub] == {"id": tub, "parent_id": attic, "name": "3",
+                                                        "kind": "Tub", "is_display": False}
     again = logged_in.get("/api/v1/snapshot", headers={"If-None-Match": resp.headers["ETag"]})
     assert again.status_code == 304
     add_piece(logged_in, name="Another")
     assert logged_in.get("/api/v1/snapshot", headers={"If-None-Match": resp.headers["ETag"]}).status_code == 200
+    etag = logged_in.get("/api/v1/snapshot").headers["ETag"]
+    fake_repo.update_place(tub, {"parent_id": attic, "name": "4", "kind": "Tub"})  # renamed on the website
+    assert logged_in.get("/api/v1/snapshot", headers={"If-None-Match": etag}).status_code == 200
 
 
 def test_catalog_download(logged_in, fake_repo):
@@ -148,43 +159,110 @@ def test_create_validation_and_bad_requests(logged_in, fake_repo):
 # -- editing pieces ----------------------------------------------------------------
 
 def test_patch_merges_with_web_edit_to_other_field(logged_in, fake_repo):
-    add_piece(logged_in, storage_tub="1", condition_grade="good")
+    one, four = add_place(fake_repo, "Tub 1"), add_place(fake_repo, "Tub 4")
+    add_piece(logged_in, storage_place_id=str(one), condition_grade="good")
     item_id = next(iter(fake_repo.items))
     # someone edits the condition on the website after the phone last synced
     logged_in.post(f"/items/{item_id}/edit", data={"category": "building", "name": "Old Curiosity Shop",
-                                                   "storage_tub": "1", "condition_grade": "fair",
+                                                   "storage_place_id": str(one), "condition_grade": "fair",
                                                    "csrf_token": csrf(logged_in)})
-    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"storage_tub": "1"},
-                                                              "changes": {"storage_tub": "4"}}, headers=headers(logged_in))
+    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"storage_place_id": one},
+                                                              "changes": {"storage_place_id": four}},
+                           headers=headers(logged_in))
     assert resp.status_code == 200
     item = resp.get_json()["item"]
-    assert item["storage_tub"] == "4" and item["condition_grade"] == "fair" and item["version"] == 3
+    assert item["storage_place_id"] == four and item["storage_location"] == "Tub 4"
+    assert item["condition_grade"] == "fair" and item["version"] == 3
 
 
 def test_patch_conflict_applies_nothing(logged_in, fake_repo):
-    add_piece(logged_in, storage_tub="1", storage_tray="A")
+    one, two, three = (add_place(fake_repo, f"Tub {n}") for n in (1, 2, 3))
+    add_piece(logged_in, storage_place_id=str(one))
     item_id = next(iter(fake_repo.items))
     logged_in.post(f"/items/{item_id}/edit", data={"category": "building", "name": "Old Curiosity Shop",
-                                                   "storage_tub": "3", "storage_tray": "A",
-                                                   "csrf_token": csrf(logged_in)})
+                                                   "storage_place_id": str(three), "csrf_token": csrf(logged_in)})
     resp = logged_in.patch(f"/api/v1/items/{item_id}", json={
-        "base": {"storage_tub": "1", "storage_tray": "A"}, "changes": {"storage_tub": "2", "storage_tray": "B"}},
+        "base": {"storage_place_id": one, "notes": None}, "changes": {"storage_place_id": two, "notes": "Chip"}},
         headers=headers(logged_in))
     assert resp.status_code == 409
     body = resp.get_json()
-    assert body["conflicts"] == [{"field": "storage_tub", "base": "1", "mine": "2", "theirs": "3"}]
-    assert body["item"]["storage_tub"] == "3"
-    assert fake_repo.items[item_id]["storage_tray"] == "A"  # the non-conflicting field was not applied either
+    assert body["conflicts"] == [{"field": "storage_place_id", "base": one, "mine": two, "theirs": three}]
+    assert body["item"]["storage_place_id"] == three
+    assert fake_repo.items[item_id]["notes"] is None  # the non-conflicting field was not applied either
 
 
 def test_patch_resolution_by_rebasing(logged_in, fake_repo):
-    add_piece(logged_in, storage_tub="1")
+    one, two, three = (add_place(fake_repo, f"Tub {n}") for n in (1, 2, 3))
+    add_piece(logged_in, storage_place_id=str(one))
     item_id = next(iter(fake_repo.items))
-    fake_repo.items[item_id]["storage_tub"] = "3"
+    fake_repo.items[item_id]["storage_place_id"] = three
     # the person chose "keep mine": the phone re-sends with the server's value as base
-    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"storage_tub": "3"},
-                                                              "changes": {"storage_tub": "2"}}, headers=headers(logged_in))
-    assert resp.status_code == 200 and resp.get_json()["item"]["storage_tub"] == "2"
+    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"storage_place_id": three},
+                                                              "changes": {"storage_place_id": two}},
+                           headers=headers(logged_in))
+    assert resp.status_code == 200 and resp.get_json()["item"]["storage_place_id"] == two
+
+
+def test_patch_rejects_missing_or_wrong_kind_of_place(logged_in, fake_repo):
+    shelf = add_place(fake_repo, "Shelf")
+    mantel = add_place(fake_repo, "Mantel", display=True)
+    add_piece(logged_in)
+    item_id = next(iter(fake_repo.items))
+    h = headers(logged_in)
+    for changes, field in (({"storage_place_id": 999}, "storage_place_id"),
+                           ({"storage_place_id": mantel}, "storage_place_id"),
+                           ({"display_place_id": shelf}, "display_place_id")):
+        resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {k: None for k in changes},
+                                                                  "changes": changes}, headers=h)
+        assert resp.status_code == 422 and field in resp.get_json()["errors"], changes
+    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"display_place_id": None},
+                                                              "changes": {"display_place_id": mantel}}, headers=h)
+    assert resp.status_code == 200 and fake_repo.items[item_id]["display_place_id"] == mantel
+
+
+# -- older phone app versions (Location / Tub / Tray instead of places) --------------
+
+def test_old_phone_app_tub_change_moves_the_piece_to_that_place(logged_in, fake_repo):
+    attic = add_place(fake_repo, "Attic")
+    tub1 = add_place(fake_repo, "1", parent=attic, kind="Tub")
+    add_piece(logged_in, storage_place_id=str(tub1))
+    item_id = next(iter(fake_repo.items))
+    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"storage_tub": "1"},
+                                                              "changes": {"storage_tub": "2"}},
+                           headers=headers(logged_in))
+    assert resp.status_code == 200
+    item = resp.get_json()["item"]
+    tub2 = fake_repo.places[item["storage_place_id"]]
+    assert (tub2["parent_id"], tub2["name"], tub2["kind"]) == (attic, "2", "Tub")
+    assert (item["storage_location"], item["storage_tub"]) == ("Attic", "2")
+    # a second piece moved to tub 2 the same way ends up in the same place
+    add_piece(logged_in, name="Second", storage_place_id=str(tub1))
+    second = max(fake_repo.items)
+    logged_in.patch(f"/api/v1/items/{second}", json={"base": {"storage_tub": "1"}, "changes": {"storage_tub": "2"}},
+                    headers=headers(logged_in))
+    assert fake_repo.items[second]["storage_place_id"] == tub2["id"]
+
+
+def test_old_phone_app_edit_leaves_a_deeper_place_alone(logged_in, fake_repo):
+    garage = add_place(fake_repo, "Garage")
+    cabinet = add_place(fake_repo, "2", parent=garage, kind="Cabinet")
+    drawer = add_place(fake_repo, "3", parent=cabinet, kind="Drawer")
+    spot = add_place(fake_repo, "B", parent=drawer, kind="Spot")
+    add_piece(logged_in, storage_place_id=str(spot))
+    item_id = next(iter(fake_repo.items))
+    # the old app's copy shows Location/Tub/Tray; re-sending the same tray must not move the piece
+    resp = logged_in.patch(f"/api/v1/items/{item_id}", json={"base": {"storage_tray": "3", "notes": None},
+                                                              "changes": {"storage_tray": "3", "notes": "Fine"}},
+                           headers=headers(logged_in))
+    assert resp.status_code == 200 and fake_repo.items[item_id]["storage_place_id"] == spot
+
+
+def test_old_phone_app_create_with_tub_uses_existing_place(logged_in, fake_repo):
+    tub = add_place(fake_repo, "2", kind="Tub")
+    body = {"client_uuid": new_uuid(), "fields": {"category": "figure", "name": "Carolers", "storage_tub": "2"}}
+    resp = logged_in.post("/api/v1/items", json=body, headers=headers(logged_in))
+    assert resp.status_code == 201 and resp.get_json()["item"]["storage_place_id"] == tub
+    assert len(fake_repo.places) == 1
 
 
 def test_patch_invalid_and_missing(logged_in, fake_repo):
@@ -236,6 +314,26 @@ def test_extras_create_idempotent_and_patch(logged_in, fake_repo):
     resp = logged_in.post(f"/api/v1/items/{item_id}/extras", json={"client_uuid": new_uuid(), "fields": {
         "description": ""}}, headers=h)
     assert resp.status_code == 422
+
+
+def test_extra_storage_place_and_old_apps_keep_it(logged_in, fake_repo):
+    add_piece(logged_in)
+    item_id = next(iter(fake_repo.items))
+    drawer = add_place(fake_repo, "Cord drawer")
+    mantel = add_place(fake_repo, "Mantel", display=True)
+    h = headers(logged_in)
+    resp = logged_in.post(f"/api/v1/items/{item_id}/extras", json={"client_uuid": new_uuid(), "fields": {
+        "description": "Light cord", "storage_place_id": drawer}}, headers=h)
+    assert resp.status_code == 201
+    extra = resp.get_json()["extra"]
+    assert extra["storage_place_id"] == drawer
+    # an older phone app only knows the four original fields: the place stays
+    resp = logged_in.patch(f"/api/v1/items/{item_id}/extras/{extra['id']}", json={
+        "base": {"quantity": 1}, "changes": {"quantity": 2}}, headers=h)
+    assert resp.status_code == 200 and resp.get_json()["extra"]["storage_place_id"] == drawer
+    resp = logged_in.patch(f"/api/v1/items/{item_id}/extras/{extra['id']}", json={
+        "base": {"storage_place_id": drawer}, "changes": {"storage_place_id": mantel}}, headers=h)
+    assert resp.status_code == 422 and "storage_place_id" in resp.get_json()["errors"]
 
 
 # -- photos ------------------------------------------------------------------------

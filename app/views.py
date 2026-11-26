@@ -27,6 +27,7 @@ from flask import (
 )
 
 from . import catalog_match, export, photos, scans
+from .places import KIND_SUGGESTIONS, MAX_DEPTH, PlaceTree
 from .auth import (
     check_csrf,
     current_user,
@@ -36,11 +37,12 @@ from .auth import (
     safe_next_url,
     verify_credentials,
 )
-from .repository import PAGE_SIZE, VersionConflict
+from .repository import PAGE_SIZE, DuplicatePlace, VersionConflict
 from .validation import (
     ITEM_BOOL_FIELDS,
     ITEM_COLUMNS,
     MEASUREMENT_FIELDS,
+    PLACE_FIELDS,
     format_inches,
     SORTS,
     STORAGE_COLUMNS,
@@ -49,6 +51,7 @@ from .validation import (
     parse_id_list,
     parse_item_form,
     parse_list_filters,
+    parse_place_form,
     parse_positive_int,
 )
 
@@ -109,6 +112,7 @@ _FIELD_LABELS = {
     "on_display": "On display", "height_in": "Height", "width_in": "Width", "depth_in": "Depth",
     "box_height_in": "Box height", "box_width_in": "Box width", "box_depth_in": "Box depth",
     "catalog_id": "Catalog link", "description": "Description", "quantity": "Quantity",
+    "storage_place_id": "Storage place", "display_place_id": "Display spot",
 }
 
 
@@ -127,10 +131,14 @@ def _changed_fields(submitted: dict[str, Any], saved: dict[str, Any]) -> list[tu
     """The saved values that differ from what was submitted, labelled for the conflict notice."""
     changed = []
     for key, value in saved.items():
+        if key in STORAGE_COLUMNS:
+            continue  # follows the storage place, never edited on the form
         if key in submitted and submitted[key] != value:
             shown = value
             if key in ITEM_BOOL_FIELDS:
                 shown = "Yes" if value else "No"
+            elif key in PLACE_FIELDS and value not in (None, ""):
+                shown = _place_tree().path_text(int(value)) or value
             changed.append((_FIELD_LABELS.get(key, key), "(blank)" if shown in (None, "") else str(shown)))
     return changed or [("(no visible fields)", "only the version number changed")]
 
@@ -143,7 +151,46 @@ def _submitted_version() -> int | None:
 
 def _extra_values(extra: dict[str, Any]) -> dict[str, Any]:
     return {"description": extra["description"], "quantity": extra["quantity"],
-            "condition_grade": extra["condition_grade"], "notes": extra["notes"]}
+            "condition_grade": extra["condition_grade"], "notes": extra["notes"],
+            "storage_place_id": extra.get("storage_place_id")}
+
+
+def _place_tree() -> PlaceTree:
+    """Every storage place, read once per request."""
+    if "place_tree" not in g:
+        g.place_tree = PlaceTree(repo().list_places())
+    return g.place_tree
+
+
+def _check_places(data: dict[str, Any], errors: dict[str, str],
+                  fields: tuple[str, ...] = PLACE_FIELDS) -> None:
+    """Record an error for a place that doesn't exist, or a storage place used as a
+    display spot (or the other way round)."""
+    tree = _place_tree()
+    for key in fields:
+        place_id = data.get(key)
+        if place_id is None:
+            continue
+        place = tree.get(place_id)
+        want_display = key == "display_place_id"
+        if place is None:
+            errors[key] = "That place no longer exists; choose another."
+            data[key] = None
+        elif bool(place.get("is_display")) != want_display:
+            errors[key] = ("Choose a display spot." if want_display
+                           else "Choose a storage place, not a display spot.")
+
+
+# Template functions (also visible inside imported macros). The places table is
+# read only by pages that show a place.
+@bp.app_template_global("place_path")
+def _place_path(place_id: Any) -> str:
+    return _place_tree().path_text(int(place_id)) if place_id not in (None, "") else ""
+
+
+@bp.app_template_global("place_options")
+def _place_options(display: bool | None = None) -> list[tuple[int, str]]:
+    return _place_tree().options(display)
 
 
 def _check_catalog_link(data: dict[str, Any], errors: dict[str, str]) -> dict[str, Any] | None:
@@ -199,8 +246,7 @@ def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _storage_suggestions() -> dict[str, list[str]]:
-    r = repo()
-    return {column: r.distinct_values(column) for column in (*STORAGE_COLUMNS, "series")}
+    return {"series": repo().distinct_values("series")}
 
 
 # -- auth --------------------------------------------------------------------
@@ -327,7 +373,6 @@ def item_list() -> Any:
         pages=pages,
         page_url=page_url,
         sorts=SORTS,
-        suggestions=_storage_suggestions(),
     )
 
 
@@ -338,6 +383,7 @@ def item_new() -> Any:
         check_csrf()
         data, errors = parse_item_form(request.form)
         catalog = _check_catalog_link(data, errors)
+        _check_places(data, errors)
         if not errors:
             item_id = repo().create_item(data)
             flash(f"Added “{data['name']}”.", "success")
@@ -356,6 +402,11 @@ def item_new() -> Any:
         catalog = repo().get_catalog_item(catalog_id)
         if catalog is not None:
             preset.update(_form_from_catalog(catalog))
+    # "Add a piece here" from a place's page.
+    for key, arg in (("storage_place_id", "place"), ("display_place_id", "display")):
+        place_id = parse_positive_int(request.args.get(arg))
+        if place_id is not None:
+            preset[key] = str(place_id)
     return render_template(
         "item_form.html", form=preset, errors={}, item=None, catalog=catalog,
         suggestions=_storage_suggestions(),
@@ -398,6 +449,7 @@ def item_edit(item_id: int) -> Any:
         check_csrf()
         data, errors = parse_item_form(request.form)
         catalog = _check_catalog_link(data, errors)
+        _check_places(data, errors)
         stale = None if errors else _stale_fields(
             request.form.get("version"), item, _row_to_form(data), _row_to_form(item))
         if not errors and not stale:
@@ -455,6 +507,7 @@ def extra_add(item_id: int) -> Any:
     check_csrf()
     item = _item_or_404(item_id)
     data, errors = parse_extra_form(request.form)
+    _check_places(data, errors, ("storage_place_id",))
     if errors:
         r = repo()
         return (
@@ -489,6 +542,7 @@ def extra_edit(item_id: int, extra_id: int) -> Any:
     if request.method == "POST":
         check_csrf()
         data, errors = parse_extra_form(request.form)
+        _check_places(data, errors, ("storage_place_id",))
         saved = _extra_values(extra)
         stale = None if errors else _stale_fields(request.form.get("version"), extra, data, saved)
         if not errors and not stale:
@@ -511,6 +565,7 @@ def extra_edit(item_id: int, extra_id: int) -> Any:
         "quantity": str(extra["quantity"]),
         "condition_grade": extra["condition_grade"] or "",
         "notes": extra["notes"] or "",
+        "storage_place_id": str(extra["storage_place_id"]) if extra.get("storage_place_id") else "",
     }
     return render_template("extra_form.html", item=item, extra=extra, form=form, errors={},
                            version=extra.get("version"))
@@ -994,13 +1049,118 @@ def catalog_photo_delete(photo_id: int) -> Any:
 @bp.get("/storage")
 @login_required
 def storage() -> Any:
-    rows = repo().storage_summary()
-    for row in rows:
-        args = {c: row[c] for c in STORAGE_COLUMNS if row[c]}
-        args = {**args, "exact_storage": "yes"} if args else {"unstored": "yes"}
-        args["sort"] = "storage"
-        row["href"] = f"{url_for('main.item_list')}?{urlencode(args)}"
-    return render_template("storage.html", rows=rows)
+    tree = _place_tree()
+    totals: dict[int, dict[str, int]] = {}
+    for row, _depth in tree.walk():
+        sub = tree.descendants(int(row["id"]))
+        totals[int(row["id"])] = {
+            key: sum(int(tree.by_id[i].get(key) or 0) for i in sub) for key in ("items", "displayed", "extras")}
+    return render_template("storage.html", tree=tree, totals=totals, unplaced=repo().count_unplaced())
+
+
+def _place_or_404(place_id: int) -> dict[str, Any]:
+    place = _place_tree().get(place_id)
+    if place is None:
+        abort(404)
+    return place
+
+
+def _place_form_values(place: dict[str, Any]) -> dict[str, str]:
+    return {"name": place["name"], "kind": place.get("kind") or "",
+            "parent_id": str(place["parent_id"]) if place.get("parent_id") else "",
+            "is_display": "1" if place.get("is_display") else "", "notes": place.get("notes") or ""}
+
+
+@bp.get("/places/<int:place_id>")
+@login_required
+def place_detail(place_id: int) -> Any:
+    tree = _place_tree()
+    place = _place_or_404(place_id)
+    contents = repo().place_contents(tree.descendants(place_id))
+    return render_template("place_detail.html", place=place, tree=tree, contents=contents,
+                           depth=tree.depth(place_id),
+                           children=[tree.by_id[c] for c in tree.children.get(place_id, [])])
+
+
+def _place_form_page(place: dict[str, Any] | None, form: Any, errors: dict[str, str], status: int = 200) -> Any:
+    tree = _place_tree()
+    # A place can't move inside itself or a place within it.
+    excluded = set(tree.descendants(int(place["id"]))) if place else set()
+    parents = [(pid, text) for pid, text in tree.options() if pid not in excluded]
+    return render_template("place_form.html", place=place, form=form, errors=errors, parents=parents,
+                           kinds=KIND_SUGGESTIONS), status
+
+
+@bp.route("/places/new", methods=["GET", "POST"])
+@login_required
+def place_new() -> Any:
+    if request.method == "GET":
+        parent_id = parse_positive_int(request.args.get("parent"))
+        parent = _place_tree().get(parent_id)
+        form = {"parent_id": str(parent_id) if parent else "",
+                "is_display": "1" if parent and parent.get("is_display") else ""}
+        return _place_form_page(None, form, {})
+    check_csrf()
+    data, errors = parse_place_form(request.form)
+    tree = _place_tree()
+    if data["parent_id"] is not None and data["parent_id"] not in tree:
+        errors["parent_id"] = "That place no longer exists; choose another."
+    elif data["parent_id"] is not None and tree.depth(data["parent_id"]) >= MAX_DEPTH:
+        errors["parent_id"] = f"Places can be nested at most {MAX_DEPTH} levels deep."
+    if not errors:
+        try:
+            new_id = repo().create_place(data)
+        except DuplicatePlace:
+            errors["name"] = "There is already a place with this name there."
+        else:
+            if new_id is None:
+                errors["parent_id"] = "That place no longer exists; choose another."
+            else:
+                flash(f"Added “{data['name']}”.", "success")
+                return redirect(url_for("main.place_detail", place_id=new_id))
+    return _place_form_page(None, request.form, errors, 400)
+
+
+@bp.route("/places/<int:place_id>/edit", methods=["GET", "POST"])
+@login_required
+def place_edit(place_id: int) -> Any:
+    place = repo().get_place(place_id)
+    if place is None:
+        abort(404)
+    if request.method == "GET":
+        return _place_form_page(place, _place_form_values(place), {})
+    check_csrf()
+    data, errors = parse_place_form(request.form)
+    if not errors:
+        try:
+            problem = repo().update_place(place_id, data)
+        except DuplicatePlace:
+            errors["name"] = "There is already a place with this name there."
+        else:
+            if problem == "missing":
+                abort(404)
+            if problem:
+                errors["is_display" if "display spot" in problem else "parent_id"] = problem
+            else:
+                flash("Place saved.", "success")
+                return redirect(url_for("main.place_detail", place_id=place_id))
+    return _place_form_page(place, request.form, errors, 400)
+
+
+@bp.post("/places/<int:place_id>/delete")
+@login_required
+def place_delete(place_id: int) -> Any:
+    check_csrf()
+    place = _place_or_404(place_id)
+    problem = repo().delete_place(place_id)
+    if problem == "missing":
+        abort(404)
+    if problem:
+        flash(problem, "error")
+        return redirect(url_for("main.place_detail", place_id=place_id))
+    flash(f"Deleted “{place['name']}”.", "success")
+    parent = place.get("parent_id")
+    return redirect(url_for("main.place_detail", place_id=parent) if parent else url_for("main.storage"))
 
 
 @bp.get("/summary")

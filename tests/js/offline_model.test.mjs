@@ -315,3 +315,37 @@ test("the phone's catalog search skips entries removed from the reference lists"
   ];
   assert.deepEqual(m.searchCatalog(entries, "Fezziwig").map((e) => e.id), [1, 3]);
 });
+
+test("place paths, labels and pickers", () => {
+  const t = m.placeTree([
+    { id: 1, parent_id: null, name: "Garage", kind: null, is_display: false },
+    { id: 2, parent_id: 1, name: "10", kind: "Cabinet", is_display: false },
+    { id: 3, parent_id: 1, name: "2", kind: "Cabinet", is_display: false },
+    { id: 4, parent_id: 3, name: "Drawer 3", kind: "Drawer", is_display: false },
+    { id: 5, parent_id: null, name: "Mantel", kind: null, is_display: true },
+  ]);
+  assert.equal(t.pathText(4), "Garage › Cabinet 2 › Drawer 3");
+  assert.equal(t.pathText(null), "");
+  assert.equal(t.pathText(99), "");
+  assert.deepEqual(t.options(false).map((o) => o.id), [1, 3, 4, 2]); // Cabinet 2 before Cabinet 10
+  assert.deepEqual(t.options(true), [{ id: 5, text: "Mantel" }]);
+  assert.equal(t.options().length, 5);
+  assert.equal(m.placeLabel({ name: "3", kind: "Tub" }), "Tub 3");
+  assert.equal(m.placeLabel({ name: "Tub 3", kind: "tub" }), "Tub 3");
+});
+
+test("a place loop in bad data does not hang", () => {
+  const t = m.placeTree([{ id: 1, parent_id: 2, name: "A" }, { id: 2, parent_id: 1, name: "B" }]);
+  assert.ok(t.path(1).length <= 2);
+});
+
+test("an edit an older app version left in Location/Tub/Tray is still sent", () => {
+  const F = m.ITEM_FIELDS;
+  const old = { key: "s-7", id: 7, client_uuid: null, server: { storage_tub: "1", version: 1 },
+    local: { name: "Mill", storage_tub: "2" }, dirty: { storage_tub: "1" }, conflict: null, error: null };
+  const merged = m.withServer(old, { id: 7, version: 2, name: "Mill", storage_place_id: 4, storage_tub: "1" }, F);
+  assert.deepEqual(m.patchPayload(merged), { base: { storage_tub: "1" }, changes: { storage_tub: "2" } });
+  const done = m.afterPatch(merged, { storage_tub: "2" }, { id: 7, version: 3, name: "Mill", storage_place_id: 9 }, F);
+  assert.deepEqual(done.dirty, {});
+  assert.equal(done.local.storage_place_id, 9);
+});

@@ -54,9 +54,15 @@ ITEM_COLUMNS = (
     *ITEM_BOOL_FIELDS,
     *MEASUREMENT_FIELDS,
     "catalog_id",
+    "storage_place_id",
+    "display_place_id",
 )
 
+# The old free-text storage columns. Since migration 0009 they hold the first
+# three levels of the piece's storage place, kept up to date by the repository;
+# the website doesn't edit them. Older phone app versions may still send them.
 STORAGE_COLUMNS = ("storage_location", "storage_tub", "storage_tray")
+PLACE_FIELDS = ("storage_place_id", "display_place_id")
 
 
 def _text(form: Mapping[str, str], key: str, max_len: int, errors: dict[str, str]) -> str | None:
@@ -199,13 +205,31 @@ def _bool(form: Mapping[str, str], key: str) -> bool:
     return form.get(key, "") in {"1", "on", "true", "yes"}
 
 
-def parse_item_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
-    """Return (clean_data, errors). clean_data has exactly the ITEM_COLUMNS keys."""
+def _place_id(form: Mapping[str, str], key: str, errors: dict[str, str]) -> int | None:
+    raw = form.get(key, "").strip()
+    if not raw:
+        return None
+    value = parse_positive_int(raw)
+    if value is None:
+        errors[key] = "Choose a place from the list."
+    return value
+
+
+def parse_item_form(form: Mapping[str, str], legacy_storage: bool = False) -> tuple[dict[str, Any], dict[str, str]]:
+    """Return (clean_data, errors). clean_data has exactly the ITEM_COLUMNS keys.
+
+    The storage text columns are read from the form only with legacy_storage
+    (values sent by an older phone app); otherwise they are left blank, and
+    the repository fills them in from the storage place.
+    """
     errors: dict[str, str] = {}
     data: dict[str, Any] = {
         "category": _choice(form, "category", CATEGORIES, errors, required=True),
     }
     for key, max_len in ITEM_TEXT_FIELDS.items():
+        if key in STORAGE_COLUMNS and not legacy_storage:
+            data[key] = None
+            continue
         data[key] = _text(form, key, max_len, errors)
     for key, max_len in ITEM_LONG_TEXT_FIELDS.items():
         data[key] = _text(form, key, max_len, errors)
@@ -237,6 +261,8 @@ def parse_item_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, 
         data["catalog_id"] = parse_positive_int(raw_catalog)
         if data["catalog_id"] is None:
             errors["catalog_id"] = "The catalog link is not valid; pick the piece again."
+    for key in PLACE_FIELDS:
+        data[key] = _place_id(form, key, errors)
     return data, errors
 
 
@@ -259,7 +285,28 @@ def parse_extra_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str,
         "quantity": quantity,
         "condition_grade": _choice(form, "condition_grade", CONDITIONS, errors, required=False),
         "notes": _text(form, "notes", 1000, errors),
+        "storage_place_id": _place_id(form, "storage_place_id", errors),
     }
+    return data, errors
+
+
+PLACE_TEXT_FIELDS: dict[str, int] = {"name": 120, "kind": 40}
+
+
+def parse_place_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
+    """A storage place: name (required), type, parent, whether it's a display spot, notes."""
+    errors: dict[str, str] = {}
+    data: dict[str, Any] = {key: _text(form, key, n, errors) for key, n in PLACE_TEXT_FIELDS.items()}
+    if data["name"] is None and "name" not in errors:
+        errors["name"] = "Name is required."
+    data["notes"] = _text(form, "notes", 1000, errors)
+    data["is_display"] = _bool(form, "is_display")
+    data["parent_id"] = None
+    raw_parent = form.get("parent_id", "").strip()
+    if raw_parent:
+        data["parent_id"] = parse_positive_int(raw_parent)
+        if data["parent_id"] is None:
+            errors["parent_id"] = "Choose a place from the list."
     return data, errors
 
 
@@ -305,7 +352,7 @@ SORTS: dict[str, str] = {
     "name": "Name",
     "category": "Category",
     "year_introduced": "Year introduced",
-    "storage": "Storage (location, tub, tray)",
+    "storage": "Storage place",
     "estimated_value": "Estimated value",
     "updated": "Recently updated",
 }
@@ -324,6 +371,8 @@ def parse_list_filters(args: Mapping[str, str]) -> dict[str, Any]:
         "storage_location": clean("storage_location", 120),
         "storage_tub": clean("storage_tub", 60),
         "storage_tray": clean("storage_tray", 60),
+        # a storage place: pieces stored in it or in any place inside it
+        "place": parse_positive_int(args.get("place")),
         "on_display": args.get("on_display") if args.get("on_display") in {"yes", "no"} else None,
         "has_extras": args.get("has_extras") if args.get("has_extras") in {"yes", "no"} else None,
         "unstored": args.get("unstored") == "yes",

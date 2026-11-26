@@ -37,11 +37,20 @@
 {%- endmacro %}
 
 {% macro storage_text(item) -%}
-  {% set parts = [] %}
-  {% if item.storage_location %}{% set _ = parts.append(item.storage_location) %}{% endif %}
-  {% if item.storage_tub %}{% set _ = parts.append('Tub ' ~ item.storage_tub) %}{% endif %}
-  {% if item.storage_tray %}{% set _ = parts.append('Tray ' ~ item.storage_tray) %}{% endif %}
-  {% if parts %}{{ parts | join(' › ') }}{% else %}<span class="muted">Not assigned</span>{% endif %}
+  {% if item.storage_place_id %}{{ place_path(item.storage_place_id) }}{% else %}<span class="muted">Not assigned</span>{% endif %}
+{%- endmacro %}
+
+{% macro place_select(form, errors, name, label, options, blank, hint=None) -%}
+  <label for="{{ name }}">{{ label }}</label>
+  <select id="{{ name }}" name="{{ name }}"
+          {% if errors.get(name) %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}>
+    <option value="">{{ blank }}</option>
+    {% for value, text in options %}
+      <option value="{{ value }}" {% if form.get(name) | string == value | string %}selected{% endif %}>{{ text }}</option>
+    {% endfor %}
+  </select>
+  {% if hint %}<span class="hint">{{ hint }}</span>{% endif %}
+  {{ field_error(errors, name) }}
 {%- endmacro %}
 
 {% macro dims(h, w, d) -%}

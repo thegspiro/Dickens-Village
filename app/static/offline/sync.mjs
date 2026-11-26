@@ -173,6 +173,7 @@ async function pullSnapshot() {
   var res = await api.call("GET", "/snapshot", undefined, { etag: etag });
   if (res.status === 304) return;
   var rows = res.data.items;
+  await db.setMeta("places", res.data.places || []);
   // Read, merge and write in one transaction so an edit saved meanwhile isn't overwritten.
   var merged = await db.mergeAll("items", function (items) {
     return m.mergeSnapshot(items, rows, m.ITEM_FIELDS, "", function (row) {

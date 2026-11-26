@@ -6,7 +6,7 @@ import re
 
 from playwright.sync_api import expect
 
-from .conftest import add_piece, api_snapshot, login
+from .conftest import add_piece, add_place, api_snapshot, login
 
 
 def open_app_and_sync(page):
@@ -27,7 +27,7 @@ def back_online(ctx, page):
 
 def test_installable_pwa_and_phone_layout(phone, tag, images):
     ctx, page, errors = phone
-    add_piece(page, f"Phone layout {tag}", storage_tub="2")
+    add_piece(page, f"Phone layout {tag}", storage_place_id=add_place(page, f"2 {tag}", kind="Tub"))
     manifest = page.request.get("/manifest.webmanifest")
     assert manifest.ok and manifest.headers["content-type"].startswith("application/manifest+json")
     page.goto(f"/items?q={tag}")
@@ -65,8 +65,10 @@ def test_offline_add_edit_photo_then_sync_with_merge_and_conflict(phone, make_co
     ctx, page, errors = phone
     _, desk, _ = make_context()
     login(desk)
-    church = add_piece(desk, f"Ivy Glen {tag}", storage_tub="1", condition_grade="good")
-    abbey = add_piece(desk, f"Brick Abbey {tag}", storage_tub="2", condition_grade="good")
+    shelf = add_place(desk, f"Shelf {tag}")
+    tub = {n: add_place(desk, str(n), kind="Tub", parent=shelf) for n in (1, 2, 5, 7, 9)}
+    church = add_piece(desk, f"Ivy Glen {tag}", storage_place_id=tub[1], condition_grade="good")
+    abbey = add_piece(desk, f"Brick Abbey {tag}", storage_place_id=tub[2], condition_grade="good")
 
     open_app_and_sync(page)
     go_offline(ctx, page)
@@ -79,7 +81,7 @@ def test_offline_add_edit_photo_then_sync_with_merge_and_conflict(phone, make_co
     page.fill('input[aria-label="Look up in catalog"]', "65005")
     page.locator(".combo-results li", has_text="Fezziwig").click()
     page.fill("#f-name", f"Fezziwig {tag}")
-    page.fill("#f-storage_tub", "5")
+    page.select_option("#f-storage_place_id", str(tub[5]))
     page.select_option("#f-condition_grade", "excellent")
     page.fill("#f-height_in", "7 1/4")
     page.click('button:has-text("Add piece")')
@@ -92,11 +94,14 @@ def test_offline_add_edit_photo_then_sync_with_merge_and_conflict(phone, make_co
     expect(page.locator("figcaption", has_text="Waiting to upload")).to_be_visible()
 
     # edit two existing pieces
-    for item_id, field, value in ((church, "#f-storage_tub", "7"), (abbey, "#f-notes", "Window cracked")):
+    for item_id, field, value in ((church, "#f-storage_place_id", str(tub[7])), (abbey, "#f-notes", "Window cracked")):
         page.goto(f"/app#/piece/s-{item_id}")
         expect(page.locator("h1")).not_to_contain_text("Edit")
         page.click('a.button:has-text("Edit")')
-        page.fill(field, value)
+        if field == "#f-storage_place_id":
+            page.select_option(field, value)
+        else:
+            page.fill(field, value)
         page.click('button:has-text("Save changes")')
         expect(page.locator(".flash-pending")).to_be_visible()
     page.goto("/app#/")
@@ -104,7 +109,7 @@ def test_offline_add_edit_photo_then_sync_with_merge_and_conflict(phone, make_co
 
     # meanwhile, on the computer: same field on one piece, a different field on the other
     desk.goto(f"/items/{church}/edit")
-    desk.fill("#storage_tub", "9")
+    desk.select_option("#storage_place_id", str(tub[9]))
     desk.click('button:has-text("Save changes")')
     desk.goto(f"/items/{abbey}/edit")
     desk.select_option("#condition_grade", "fair")
@@ -114,20 +119,24 @@ def test_offline_add_edit_photo_then_sync_with_merge_and_conflict(phone, make_co
     expect(page.locator("#sync-pill")).to_contain_text("1 need attention", timeout=30_000)
     items = {i["name"]: i for i in api_snapshot(desk)["items"]}
     new = items[f"Fezziwig {tag}"]
-    assert (new["storage_tub"], new["condition_grade"], new["height_in"]) == ("5", "excellent", "7.25")
+    assert (new["storage_place_id"], new["condition_grade"], new["height_in"]) == (tub[5], "excellent", "7.25")
+    assert new["storage_tub"] == "5"
     assert new["catalog_id"] is not None
     assert [e["description"] for e in new["extras"]] == ["Light cord"] and len(new["photos"]) == 1
     assert items[f"Brick Abbey {tag}"]["notes"] == "Window cracked"       # merged
     assert items[f"Brick Abbey {tag}"]["condition_grade"] == "fair"       # kept
-    assert items[f"Ivy Glen {tag}"]["storage_tub"] == "9"                 # held, not overwritten
+    assert items[f"Ivy Glen {tag}"]["storage_place_id"] == tub[9]        # held, not overwritten
 
     page.goto("/app#/attention")
-    expect(page.locator("fieldset.conflict")).to_contain_text("Tub")
+    expect(page.locator("fieldset.conflict")).to_contain_text("Stored in")
+    expect(page.locator("fieldset.conflict")).to_contain_text(f"Shelf {tag} › Tub 9")
     page.check('input[value="mine"]')
     page.click('button:has-text("Save my choices")')
     expect(page.locator("#sync-pill")).not_to_contain_text("attention", timeout=30_000)
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
-    assert {i["name"]: i for i in api_snapshot(desk)["items"]}[f"Ivy Glen {tag}"]["storage_tub"] == "7"
+    assert {i["name"]: i for i in api_snapshot(desk)["items"]}[f"Ivy Glen {tag}"]["storage_place_id"] == tub[7]
+    page.goto(f"/app#/piece/s-{church}")
+    expect(page.locator(".details")).to_contain_text(f"Shelf {tag} › Tub 7")
     assert errors == []
 
 
@@ -261,7 +270,7 @@ def test_edit_after_a_lost_create_reply_still_syncs(phone, tag):
     page.goto("/app#/new")
     page.select_option("#f-category", "figure")
     page.fill("#f-name", f"Lamplighter {tag}")
-    page.fill("#f-storage_tub", "1")
+    page.fill("#f-series", "1")
     page.click('button:has-text("Add piece")')
     expect(page.locator(".flash-pending")).to_be_visible()
     key = page.evaluate("decodeURIComponent(location.hash.split('/')[2])")
@@ -272,30 +281,30 @@ def test_edit_after_a_lost_create_reply_still_syncs(phone, tag):
     page.unroute("**/api/v1/items")
     ctx.set_offline(True)
     page.goto(f"/app#/edit/{key}")
-    page.fill("#f-storage_tub", "4")
+    page.fill("#f-series", "4")
     page.click('button:has-text("Save changes")')
     back_online(ctx, page)
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     pieces = [i for i in api_snapshot(page)["items"] if i["name"] == f"Lamplighter {tag}"]
-    assert len(pieces) == 1 and pieces[0]["storage_tub"] == "4"
+    assert len(pieces) == 1 and pieces[0]["series"] == "4"
     assert [e for e in errors if e.startswith("pageerror")] == []  # dropped replies log network errors
 
 
 def test_editing_the_same_field_after_a_lost_patch_reply_is_not_a_conflict(phone, tag):
     ctx, page, errors = phone
-    item_id = add_piece(page, f"Bookseller {tag}", storage_tub="1")
+    item_id = add_piece(page, f"Bookseller {tag}", series="1")
     open_app_and_sync(page)
     page.goto(f"/app#/edit/s-{item_id}")
     lose_replies(page, f"**/api/v1/items/{item_id}", "PATCH")
-    page.fill("#f-storage_tub", "2")
+    page.fill("#f-series", "2")
     page.click('button:has-text("Save changes")')
     page.wait_for_timeout(2500)  # saved on the server as tub 2; the reply was lost
     page.unroute(f"**/api/v1/items/{item_id}")
-    assert {i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["storage_tub"] == "2"
+    assert {i["id"]: i for i in api_snapshot(page)["items"]}[item_id]["series"] == "2"
     page.goto(f"/app#/edit/s-{item_id}")
-    page.fill("#f-storage_tub", "3")
+    page.fill("#f-series", "3")
     page.click('button:has-text("Save changes")')
-    wait_for_server(page, item_id, "storage_tub", "3")
+    wait_for_server(page, item_id, "series", "3")
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     expect(page.locator("#sync-pill")).not_to_contain_text("attention")
     assert [e for e in errors if e.startswith("pageerror")] == []  # dropped replies log network errors
@@ -306,13 +315,13 @@ def test_background_sync_does_not_wipe_a_half_filled_form(phone, tag):
     open_app_and_sync(page)
     page.goto("/app#/new")
     page.fill("#f-name", f"Half typed {tag}")
-    page.fill("#f-storage_tub", "8")
+    page.fill("#f-series", "8")
     page.locator("h1").click()  # focus leaves the fields, as when switching apps
     page.click("#sync-pill button")
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     page.wait_for_timeout(300)
     expect(page.locator("#f-name")).to_have_value(f"Half typed {tag}")
-    expect(page.locator("#f-storage_tub")).to_have_value("8")
+    expect(page.locator("#f-series")).to_have_value("8")
     assert errors == []
 
 
@@ -481,7 +490,7 @@ def test_logging_out_offline_erases_nothing(phone, tag):
 
 def test_an_outdated_security_token_is_refreshed_not_treated_as_logged_out(phone, tag):
     ctx, page, errors = phone
-    item_id = add_piece(page, f"Token {tag}", storage_tub="1")
+    item_id = add_piece(page, f"Token {tag}", series="1")
     open_app_and_sync(page)
     refused = []
 
@@ -495,9 +504,9 @@ def test_an_outdated_security_token_is_refreshed_not_treated_as_logged_out(phone
 
     page.route(f"**/api/v1/items/{item_id}", stale_once)
     page.goto(f"/app#/edit/s-{item_id}")
-    page.fill("#f-storage_tub", "6")
+    page.fill("#f-series", "6")
     page.click('button:has-text("Save changes")')
-    wait_for_server(page, item_id, "storage_tub", "6")
+    wait_for_server(page, item_id, "series", "6")
     assert refused
     expect(page.locator("#sync-pill")).to_contain_text("All synced", timeout=30_000)
     expect(page.locator("#sync-pill")).not_to_contain_text("Log in")
@@ -505,13 +514,13 @@ def test_an_outdated_security_token_is_refreshed_not_treated_as_logged_out(phone
 
 def test_a_proxy_refusal_is_reported_on_the_change_not_as_a_login_problem(phone, tag):
     ctx, page, errors = phone
-    item_id = add_piece(page, f"Proxy {tag}", storage_tub="1")
+    item_id = add_piece(page, f"Proxy {tag}", series="1")
     open_app_and_sync(page)
     page.route(f"**/api/v1/items/{item_id}", lambda route: route.fulfill(
         status=403, content_type="text/html", body="<h1>Forbidden by firewall</h1>")
         if route.request.method == "PATCH" else route.continue_())
     page.goto(f"/app#/edit/s-{item_id}")
-    page.fill("#f-storage_tub", "6")
+    page.fill("#f-series", "6")
     page.click('button:has-text("Save changes")')
     expect(page.locator("#sync-pill")).to_contain_text("1 need attention", timeout=30_000)
     expect(page.locator("#sync-pill")).not_to_contain_text("Log in")

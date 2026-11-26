@@ -164,3 +164,35 @@ def test_zip_is_produced_in_chunks(tmp_path):
     assert max(len(c) for c in chunks) < 600 * 1024  # never the whole file at once
     archive = zipfile.ZipFile(io.BytesIO(b"".join(chunks)))
     assert len(archive.read(f"pieces/1-Big/scans/{big}")) == 3 * 1024 * 1024 + 4
+
+
+def test_exports_include_storage_places(logged_in, fake_repo):
+    from tests.conftest import add_place
+
+    garage = add_place(fake_repo, "Garage")
+    drawer = add_place(fake_repo, "3", parent=garage, kind="Drawer")
+    spot = add_place(fake_repo, "B", parent=drawer, kind="Spot")
+    mantel = add_place(fake_repo, "Mantel", display=True)
+    bin_ = add_place(fake_repo, "Cords", parent=garage)
+    logged_in.post("/items/new", data={"category": "building", "name": "Bakery", "storage_place_id": str(spot),
+                                       "display_place_id": str(mantel), "csrf_token": csrf(logged_in)})
+    (item_id,) = fake_repo.items
+    logged_in.post(f"/items/{item_id}/extras", data={"description": "Cord", "storage_place_id": str(bin_),
+                                                     "csrf_token": csrf(logged_in)})
+    data = fake_repo.export_data()
+
+    doc = export.collection_json(data, NOW)
+    (piece,) = doc["pieces"]
+    assert piece["storage_place_id"] == spot and piece["storage_path"] == "Garage › Drawer 3 › Spot B"
+    assert piece["display_path"] == "Mantel"
+    # the old columns hold the first three levels
+    assert (piece["storage_location"], piece["storage_tub"], piece["storage_tray"]) == ("Garage", "3", "B")
+    assert piece["extras"][0]["storage_path"] == "Garage › Cords"
+    assert {p["id"]: p["path"] for p in doc["places"]}[spot] == "Garage › Drawer 3 › Spot B"
+    assert {p["id"]: p["is_display"] for p in doc["places"]}[mantel] is True
+
+    (row,) = list(csv.DictReader(io.StringIO(export.pieces_csv(data).lstrip("﻿"))))
+    assert row["storage_path"] == "Garage › Drawer 3 › Spot B" and row["display_path"] == "Mantel"
+    assert row["storage_tub"] == "3" and row["storage_place_id"] == str(spot)
+    (extra,) = list(csv.DictReader(io.StringIO(export.extras_csv(data).lstrip("﻿"))))
+    assert extra["storage_path"] == "Garage › Cords"

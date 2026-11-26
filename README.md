@@ -5,7 +5,7 @@ A self-hosted tracker for a Department 56 Dickens' Village collection: buildings
 ## Features
 
 - **Pieces** in three categories: Building, Figure / Person, Accessory / Decoration. Each piece records its item number, series, year introduced and year retired.
-- **Storage:** Location (where the tub is kept), Tub and Tray for every piece. Each field suggests values you've already used. The **Storage** page lists every location, tub and tray with a piece count, and links to the pieces inside.
+- **Storage places:** places can sit inside each other as deep as you need, for example Garage › Cabinet 2 › Drawer 3 › Spot B. Each place has a name and an optional type, shown before a short name ("Drawer" + "3" reads "Drawer 3"). Mark a place as a **display spot** (a table, shelf or mantel) to record where a piece goes when it's put out. Each piece has a place it's stored in and a display spot. Each extra (a light cord, say) can have its own place, or stay with its piece. The **Storage** page shows the whole tree with counts. Each place has its own page listing what belongs in it, what's inside the places within it, and which of those pieces are out on display. The collection list can filter by place, including the places inside it.
 - **Current condition:** a grade (Mint → Damaged), condition notes, the date you last checked, and whether you have the original box and sleeve.
 - **Extras:** any number per piece (light cord, bulb, sign…), each with its own quantity, condition and notes. The collection list can filter on "has extras."
 - **Links** between a building and the figures and accessories that go with it.
@@ -68,7 +68,7 @@ The pages adapt to small screens: the menu collapses, lists become cards, and ph
 The **Phone app** (menu → *Phone app*, or `/app`) keeps a copy of your collection and the catalog on the phone. If the server can't be reached, any page you open goes to the phone app instead. Offline you can:
 
 - browse and search your pieces;
-- add pieces, including filling them in from the catalog;
+- add pieces, including filling them in from the catalog, and pick their storage place and display spot (new places are added on the full site);
 - edit pieces and extras, and add extras;
 - take or attach photos (they're shrunk to 2000 pixels on the long side, the size the server keeps, so they take less space on the phone and upload faster). A photo the server refused can be tried again from **Needs attention**.
 
@@ -90,10 +90,10 @@ The same image runs on ECS or EC2. It needs MySQL 8.0.19 or newer (the catalog i
 
 The **Summary** page has download links for:
 - **Pieces (CSV)** and **Extras (CSV)**: one row per piece or extra, for Excel, Numbers or Google Sheets. Cells that a spreadsheet would treat as a formula start with `'`.
-- **Everything (JSON)**: pieces with their extras, links, photos (with captions, in order) and scans.
+- **Everything (JSON)**: pieces with their extras, links, photos (with captions, in order) and scans, plus every storage place.
 - **Photos and 3D scans (zip)**: every photo and scan at full size, in a folder per piece (and per catalog entry for reference photos), plus the files above. It is streamed, so it can be large without using much memory on the server.
 
-These are copies for you to keep or use elsewhere; for a restorable backup, see below.
+Pieces and extras include `storage_path` (and pieces `display_path`), the full place path as text, for example "Garage › Cabinet 2 › Drawer 3". These are copies for you to keep or use elsewhere; for a restorable backup, see below.
 
 ## Backups
 
@@ -135,6 +135,8 @@ docker compose run --rm app python -m app.migrate up
 docker compose run --rm app python -m app.migrate down --yes   # rolls back the latest migration
 ```
 Each migration is a pair of files in `migrations/`. Every up migration is idempotent. `0001_initial.down.sql` drops every table, so back up before running it.
+
+`0009_storage_places` turns the old Location / Tub / Tray values into storage places. Each piece's non-blank values become a path, and tubs and trays get the types "Tub" and "Tray", so they read as before. For example, Basement, 3, Top becomes Basement › Tub 3 › Tray Top. Values that differ only in capitals ("attic", "Attic") become one place. The Location, Tub and Tray columns are kept, and the app keeps them equal to the first three levels of each piece's place. That way the CSV and JSON exports, old `/items?storage_tub=…` links and phone app copies from before the update keep working. An edit to Tub sent by an older phone app moves the piece to that place, creating it if needed. Rolling this migration back keeps those three levels. It loses deeper levels, place types and notes, display spots, and where extras are stored.
 
 ## Tests
 

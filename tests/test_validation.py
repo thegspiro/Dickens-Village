@@ -6,6 +6,7 @@ from app.validation import (
     parse_extra_form,
     parse_item_form,
     parse_list_filters,
+    parse_place_form,
     parse_positive_int,
 )
 
@@ -34,17 +35,36 @@ def test_unknown_category_and_condition_rejected():
     assert "category" in errors and "condition_grade" in errors
 
 
-def test_storage_fields_are_trimmed_and_whitespace_collapsed():
-    data, errors = parse_item_form(
-        valid_form(storage_location="  Basement   shelf 2 ", storage_tub=" 3 ", storage_tray="Top")
-    )
+def test_old_storage_fields_are_only_read_for_older_phone_apps():
+    form = valid_form(storage_location="  Basement   shelf 2 ", storage_tub=" 3 ", storage_tray="Top")
+    data, errors = parse_item_form(form)
+    assert errors == {}
+    assert (data["storage_location"], data["storage_tub"], data["storage_tray"]) == (None, None, None)
+    data, errors = parse_item_form(form, legacy_storage=True)
     assert errors == {}
     assert (data["storage_location"], data["storage_tub"], data["storage_tray"]) == ("Basement shelf 2", "3", "Top")
 
 
 def test_text_length_limits():
-    _, errors = parse_item_form(valid_form(storage_tub="x" * 61))
+    _, errors = parse_item_form(valid_form(storage_tub="x" * 61), legacy_storage=True)
     assert "storage_tub" in errors
+    _, errors = parse_item_form(valid_form(name="x" * 201))
+    assert "name" in errors
+
+
+def test_place_fields():
+    data, errors = parse_item_form(valid_form(storage_place_id=" 12 ", display_place_id=""))
+    assert errors == {} and data["storage_place_id"] == 12 and data["display_place_id"] is None
+    _, errors = parse_item_form(valid_form(storage_place_id="abc", display_place_id="-1"))
+    assert "storage_place_id" in errors and "display_place_id" in errors
+
+
+def test_place_form():
+    data, errors = parse_place_form({"name": "  Drawer   3 ", "kind": "Drawer", "parent_id": "4", "is_display": "1"})
+    assert errors == {}
+    assert data == {"name": "Drawer 3", "kind": "Drawer", "parent_id": 4, "is_display": True, "notes": None}
+    _, errors = parse_place_form({"name": "", "kind": "x" * 41, "parent_id": "top"})
+    assert set(errors) == {"name", "kind", "parent_id"}
 
 
 def test_money_parsing():
@@ -86,7 +106,10 @@ def test_checkboxes():
 
 def test_extra_form():
     data, errors = parse_extra_form({"description": "Light cord", "quantity": "2", "condition_grade": "good"})
-    assert errors == {} and data == {"description": "Light cord", "quantity": 2, "condition_grade": "good", "notes": None}
+    assert errors == {} and data == {"description": "Light cord", "quantity": 2, "condition_grade": "good", "notes": None,
+                                     "storage_place_id": None}
+    data, errors = parse_extra_form({"description": "Light cord", "storage_place_id": "7"})
+    assert errors == {} and data["storage_place_id"] == 7
     data, errors = parse_extra_form({"description": "Bulb"})
     assert errors == {} and data["quantity"] == 1
     _, errors = parse_extra_form({"description": "", "quantity": "0"})

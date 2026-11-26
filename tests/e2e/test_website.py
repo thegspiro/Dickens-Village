@@ -7,7 +7,7 @@ import re
 
 from playwright.sync_api import expect
 
-from .conftest import BASE_URL, MAX_UPLOAD_MB, PASSWORD, USERNAME, add_piece, login
+from .conftest import BASE_URL, MAX_UPLOAD_MB, PASSWORD, USERNAME, add_piece, add_place, login
 
 
 def test_login_required_and_wrong_password(make_context):
@@ -55,10 +55,14 @@ def test_security_headers(desk):
 def test_piece_create_view_edit_delete(desk, tag):
     ctx, page, errors = desk
     name = f"Old Curiosity Shop {tag}"
+    basement = add_place(page, f"Basement {tag}")
+    tub3 = add_place(page, "3", kind="Tub", parent=basement)
+    top = add_place(page, "Top", kind="Tray", parent=tub3)
+    tub4 = add_place(page, "4", kind="Tub", parent=basement)
     item_id = add_piece(page, name, item_number="56.59056", series="Dickens' Village",
                         year_introduced="1987", year_retired="1999", condition_grade="good",
                         condition_checked_on="2026-11-01", condition_notes="Small chip on the chimney",
-                        storage_location=f"Basement {tag}", storage_tub="3", storage_tray="Top",
+                        storage_place_id=top,
                         height_in="7 1/4", width_in="6.5", depth_in="5", box_height_in="9",
                         box_width_in="8 1/2", box_depth_in="7¼", price_paid="$1,250.5",
                         purchased_from="Estate sale", estimated_value="80", has_original_box="1")
@@ -74,11 +78,11 @@ def test_piece_create_view_edit_delete(desk, tag):
     page.click('a.button:has-text("Edit")')
     expect(page.locator("#height_in")).to_have_value("7.25")
     expect(page.locator("#price_paid")).to_have_value("1250.50")
-    page.fill("#storage_tub", "4")
+    page.select_option("#storage_place_id", str(tub4))
     page.fill("#price_paid", "")
     page.click('button:has-text("Save changes")')
     expect(page.locator(".flash-success")).to_contain_text("Changes saved")
-    expect(details).to_contain_text("Tub 4")
+    expect(details).to_contain_text(f"Basement {tag} › Tub 4")
     expect(page.locator(".details")).not_to_contain_text("$1,250.50")
 
     page.click('a.button:has-text("Delete")')
@@ -113,23 +117,34 @@ def test_validation_messages(desk, tag):
 def test_list_filters_storage_page_and_summary(desk, tag):
     ctx, page, _ = desk
     loc = f"Attic {tag}"
-    add_piece(page, f"Loose {tag}", storage_location=loc)
-    add_piece(page, f"Packed {tag}", storage_location=loc, storage_tub="7", storage_tray="B",
-              condition_grade="fair", on_display="1")
-    page.goto(f"/items?q={tag}&storage_tub=7")
+    attic = add_place(page, loc)
+    tub7 = add_place(page, "7", kind="Tub", parent=attic)
+    tray_b = add_place(page, "B", kind="Tray", parent=tub7)
+    add_piece(page, f"Loose {tag}", storage_place_id=attic)
+    add_piece(page, f"Packed {tag}", storage_place_id=tray_b, condition_grade="fair", on_display="1")
+    page.goto(f"/items?q={tag}&place={tub7}")
     expect(page.locator("tbody tr")).to_have_count(1)
     expect(page.locator("tbody")).to_contain_text(f"Packed {tag}")
+    page.goto(f"/items?q={tag}&storage_tub=7")  # links from before storage places still work
+    expect(page.locator("tbody tr")).to_have_count(1)
+    page.goto(f"/items?q={tag}&place={attic}")
+    expect(page.locator("tbody tr")).to_have_count(2)
     page.goto(f"/items?q={tag}&condition_grade=fair")
     expect(page.locator("tbody tr")).to_have_count(1)
     page.goto(f"/items?q={tag}&on_display=yes")
     expect(page.locator("tbody tr")).to_have_count(1)
 
     page.goto("/storage")
-    row = page.locator("tr", has_text=loc).filter(has_text="—")
-    expect(row).to_have_count(1)  # the location with no tub
-    row.locator("a").click()
-    expect(page.locator("tbody")).to_contain_text(f"Loose {tag}")
-    expect(page.locator("tbody")).not_to_contain_text(f"Packed {tag}")  # exact match only
+    tree = page.locator(".place-tree")
+    expect(tree.locator("li", has_text=loc).first).to_contain_text("2 pieces")  # counts the places inside
+    tree.locator(f'a:text-is("{loc}")').click()
+    stored = page.locator("#stored tbody")
+    expect(stored).to_contain_text(f"Loose {tag}")
+    expect(stored.locator("tr", has_text=f"Packed {tag}")).to_contain_text("Tub 7 › Tray B")
+    expect(stored.locator("tr", has_text=f"Packed {tag}")).to_contain_text("On display")
+    page.click('a:has-text("Tub 7")')
+    expect(page.locator(".breadcrumbs")).to_contain_text(loc)
+    expect(page.locator("#stored tbody tr")).to_have_count(1)
 
     page.goto("/summary")
     expect(page.locator(".stats")).to_contain_text("Pieces")
@@ -236,19 +251,21 @@ def test_edit_page_warns_when_piece_changed_elsewhere(make_context, tag):
     ctx_b, b, _ = make_context()
     login(a)
     login(b)
-    item_id = add_piece(a, f"Clash {tag}", storage_tub="1", condition_grade="good")
+    one = add_place(a, f"Tub 1 {tag}")
+    nine = add_place(a, f"Tub 9 {tag}")
+    item_id = add_piece(a, f"Clash {tag}", storage_place_id=one, condition_grade="good")
     a.goto(f"/items/{item_id}/edit")  # opened first...
     b.goto(f"/items/{item_id}/edit")  # ...and changed and saved elsewhere meanwhile
-    b.fill("#storage_tub", "9")
+    b.select_option("#storage_place_id", str(nine))
     b.click('button:has-text("Save changes")')
     expect(b.locator(".flash-success")).to_be_visible()
     a.select_option("#condition_grade", "fair")
     a.click('button:has-text("Save changes")')
     warning = a.locator(".flash-error")
     expect(warning).to_contain_text("changed somewhere else")
-    expect(warning).to_contain_text("Tub: 9")
+    expect(warning).to_contain_text(f"Storage place: Tub 9 {tag}")
     a.goto(f"/items/{item_id}")
-    expect(a.locator(".details")).to_contain_text("Tub 9")  # not overwritten
+    expect(a.locator(".details")).to_contain_text(f"Tub 9 {tag}")  # not overwritten
     expect(a.locator(".details")).to_contain_text("Good")
 
 
@@ -271,7 +288,9 @@ def test_export_downloads(desk, tag, images):
     import zipfile
 
     ctx, page, errors = desk
-    item_id = add_piece(page, f"Exported {tag}", storage_tub="3", notes="=1+1")
+    shelf = add_place(page, f"Shelf {tag}")
+    tub = add_place(page, "3", kind="Tub", parent=shelf)
+    item_id = add_piece(page, f"Exported {tag}", storage_place_id=tub, notes="=1+1")
     page.goto(f"/items/{item_id}")
     page.set_input_files("#photo", str(images["house-red.jpg"]))
     page.click('#photos button:has-text("Upload")')
@@ -285,7 +304,7 @@ def test_export_downloads(desk, tag, images):
         assert archive.testzip() is None
         doc = json_module.loads(archive.read("collection.json"))
         piece = next(p for p in doc["pieces"] if p["id"] == item_id)
-        assert piece["storage_tub"] == "3"
+        assert piece["storage_tub"] == "3" and piece["storage_path"] == f"Shelf {tag} › Tub 3"
         photo_file = piece["photos"][0]["file"]
         assert archive.read(photo_file)[:2] == b"\xff\xd8"
     with page.expect_download() as info:

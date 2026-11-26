@@ -21,15 +21,93 @@
  * so a change made elsewhere to a field the phone didn't touch is never undone.
  */
 
+/*
+ * Storage is a place (storage_place_id, display_place_id) from the places list
+ * in the snapshot. The old Location / Tub / Tray fields are not edited here any
+ * more; an edit to them saved by an older version of the app is still sent,
+ * and the server turns it into a place.
+ */
 export const ITEM_FIELDS = [
-  "category", "name", "item_number", "series", "purchased_from", "storage_location", "storage_tub",
-  "storage_tray", "condition_notes", "notes", "year_introduced", "year_retired", "purchase_date",
-  "price_paid", "estimated_value", "condition_grade", "condition_checked_on", "has_original_box",
-  "has_sleeve", "on_display", "height_in", "width_in", "depth_in", "box_height_in", "box_width_in",
-  "box_depth_in", "catalog_id",
+  "category", "name", "item_number", "series", "purchased_from", "condition_notes", "notes",
+  "year_introduced", "year_retired", "purchase_date", "price_paid", "estimated_value", "condition_grade",
+  "condition_checked_on", "has_original_box", "has_sleeve", "on_display", "height_in", "width_in",
+  "depth_in", "box_height_in", "box_width_in", "box_depth_in", "catalog_id", "storage_place_id",
+  "display_place_id",
 ];
 
-export const EXTRA_FIELDS = ["description", "quantity", "condition_grade", "notes"];
+export const EXTRA_FIELDS = ["description", "quantity", "condition_grade", "notes", "storage_place_id"];
+
+/*
+ * Storage places from the snapshot, for paths and pickers.
+ * rows: [{id, parent_id, name, kind, is_display}]
+ */
+export function placeLabel(p) {
+  var name = String(p.name || "");
+  var kind = String(p.kind || "").trim();
+  if (!kind || name.toLowerCase().indexOf(kind.toLowerCase()) === 0) return name;
+  return kind + " " + name;
+}
+
+function naturalKey(text) {
+  return String(text).toLowerCase().split(/(\d+)/).map(function (part) {
+    return /^\d+$/.test(part) ? Number(part) : part;
+  });
+}
+
+function compareNatural(a, b) {
+  var x = naturalKey(a), y = naturalKey(b);
+  for (var i = 0; i < Math.max(x.length, y.length); i++) {
+    if (x[i] === undefined) return -1;
+    if (y[i] === undefined) return 1;
+    if (x[i] === y[i]) continue;
+    if (typeof x[i] === typeof y[i]) return x[i] < y[i] ? -1 : 1;
+    return typeof x[i] === "number" ? -1 : 1;
+  }
+  return 0;
+}
+
+export function placeTree(rows) {
+  var byId = {};
+  var children = {};
+  (rows || []).forEach(function (p) { byId[p.id] = p; });
+  Object.keys(byId).forEach(function (id) {
+    var p = byId[id];
+    var parent = p.parent_id != null && byId[p.parent_id] ? p.parent_id : "";
+    (children[parent] = children[parent] || []).push(p);
+  });
+  Object.keys(children).forEach(function (k) {
+    children[k].sort(function (a, b) { return compareNatural(placeLabel(a), placeLabel(b)) || a.id - b.id; });
+  });
+
+  function path(id) {
+    var out = [];
+    var seen = {};
+    var p = id == null ? null : byId[id];
+    while (p && !seen[p.id]) {
+      seen[p.id] = true;
+      out.unshift(p);
+      p = p.parent_id != null ? byId[p.parent_id] : null;
+    }
+    return out;
+  }
+
+  function pathText(id) { return path(id).map(placeLabel).join(" › "); }
+
+  /* [{id, text}] in tree order; display true/false keeps only display spots or storage places. */
+  function options(display) {
+    var out = [];
+    (function walk(parent) {
+      (children[parent] || []).forEach(function (p) {
+        if (display === undefined || Boolean(p.is_display) === display) out.push({ id: p.id, text: pathText(p.id) });
+        walk(p.id);
+      });
+    })("");
+    return out;
+  }
+
+  return { get: function (id) { return id == null ? null : byId[id] || null; }, path: path, pathText: pathText,
+    options: options };
+}
 
 /* "" and null both mean empty, matching the server's comparison. */
 export function same(a, b) {

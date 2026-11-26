@@ -34,7 +34,7 @@ It is kept because pieces or photos may belong to it.</p>
       {% for i in owned %}
       <li>
         <a href="{{ url_for('main.item_detail', item_id=i.id) }}">{{ i.name }}</a>
-        <span class="muted">{{ CONDITIONS[i.condition_grade] if i.condition_grade else 'Not graded' }}{% if i.storage_tub %} · Tub {{ i.storage_tub }}{% endif %}{% if i.storage_tray %} · Tray {{ i.storage_tray }}{% endif %}</span>
+        <span class="muted">{{ CONDITIONS[i.condition_grade] if i.condition_grade else 'Not graded' }}{% if i.storage_place_id %} · {{ place_path(i.storage_place_id) }}{% endif %}</span>
       </li>
       {% endfor %}
     </ul>

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% from "_macros.html" import text, checkbox, datalist, field_error, place_select %}
+{% block title %}{{ 'Edit ' ~ (place | place_label) if place else 'Add a place' }}{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>{{ 'Edit “' ~ (place | place_label) ~ '”' if place else 'Add a place' }}</h1>
+  {% if errors %}<p class="flash flash-error" role="alert">Please fix the highlighted fields.</p>{% endif %}
+  <form method="post" action="{{ url_for('main.place_edit', place_id=place.id) if place else url_for('main.place_new') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {{ text(form, errors, 'name', 'Name', 120, required=True, hint='e.g. Garage, Hall closet, 3, B') }}
+    {{ text(form, errors, 'kind', 'Type', 40, list='dl-kind', hint='Optional. Shown before a short name: type Drawer + name 3 reads “Drawer 3”.') }}
+    {{ place_select(form, errors, 'parent_id', 'Inside', parents, 'Nothing (a top-level place)') }}
+    <div class="checks">{{ checkbox(form, 'is_display', 'Display spot (a table, shelf or mantel where pieces are put out)') }}</div>
+    {{ field_error(errors, 'is_display') }}
+    <label for="notes">Notes</label>
+    <textarea id="notes" name="notes" rows="3" maxlength="1000">{{ form.get('notes', '') }}</textarea>
+    {{ field_error(errors, 'notes') }}
+    {{ datalist('dl-kind', kinds) }}
+    <button type="submit">{{ 'Save' if place else 'Add place' }}</button>
+    <a href="{{ url_for('main.place_detail', place_id=place.id) if place else url_for('main.storage') }}">Cancel</a>
+  </form>
+</section>
+{% endblock %}
