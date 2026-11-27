@@ -107,7 +107,7 @@ def test_snapshot_shape_and_etag(logged_in, fake_repo):
     assert item["on_display"] is True and item["version"] == 1
     assert item["extras"][0]["description"] == "Light cord" and item["extras"][0]["storage_place_id"] is None
     assert item["photos"] == []
-    assert {p["id"]: p for p in body["places"]}[tub] == {"id": tub, "parent_id": attic, "name": "3",
+    assert {p["id"]: p for p in body["places"]}[tub] == {"id": tub, "village": "dickens", "parent_id": attic, "name": "3",
                                                         "kind": "Tub", "is_display": False}
     again = logged_in.get("/api/v1/snapshot", headers={"If-None-Match": resp.headers["ETag"]})
     assert again.status_code == 304

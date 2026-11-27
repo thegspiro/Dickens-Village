@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app import catalog
+from app.validation import VILLAGES
 from tests.conftest import csrf
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "catalog"
@@ -15,12 +16,49 @@ DATA = Path(__file__).resolve().parent.parent / "data" / "catalog"
 
 def test_committed_catalog_is_valid():
     rows = catalog.load_directory(DATA)
-    assert len(rows) == 1949
+    assert len(rows) == 1993
     assert len(catalog.parse_rows(DATA / "dickens_village_2025.csv")) == 760
     assert len(catalog.parse_rows(DATA / "general_village_accessories_2021.csv")) == 1189
+    assert len(catalog.parse_rows(DATA / "holy_land.csv")) == 44
     lists = {r.values["list_name"] for r in rows}
-    assert lists == {"lighted", "accessories", "general-accessories"}
+    assert lists == {"lighted", "accessories", "general-accessories", "holy-land-lighted", "holy-land-accessories"}
     assert all(name in catalog.LIST_LABELS for name in lists)
+    villages = {}
+    for r in rows:
+        villages.setdefault(r.values["list_name"], set()).add(r.values["village"])
+    assert villages == {"lighted": {"dickens"}, "accessories": {"dickens"}, "general-accessories": {None},
+                        "holy-land-lighted": {"holy-land"}, "holy-land-accessories": {"holy-land"}}
+    assert set(catalog.LIST_VILLAGES.values()) <= set(VILLAGES)
+
+
+def test_holy_land_spot_checks():
+    rows = [r.values for r in catalog.parse_rows(DATA / "holy_land.csv")]
+    by_number = {v["item_number"]: v for v in rows}
+    assert len(by_number) == 44  # no shared numbers
+
+    town = by_number["56.59757"]
+    assert town["name"] == "Little Town Of Bethlehem" and town["details"] == "Set of 12"
+    assert town["series"] == "Little Town Of Bethlehem" and town["default_category"] == "building"
+    assert (town["year_issued"], town["year_retired"]) == (1987, 1999)
+    assert town["srp_usd"] == Decimal("150.00") and town["srp_cad"] is None
+
+    assert by_number["56.59810"]["series"] == "The Easter Story"
+    assert by_number["56.59924"]["series"] == "Parables Of Jesus"
+    angels = by_number["56.59759"]
+    assert angels["default_category"] == "accessory" and angels["list_name"] == "holy-land-accessories"
+
+    # Kept as printed, and reported.
+    temple = by_number["56.59799"]
+    assert temple["srp_usd"] == Decimal("15.00") and temple["srp_cad"] == Decimal("232.50")
+    assert '"High Priests" Accesory' in temple["details"]
+    assert by_number["56.59802"]["details"].startswith("Set of f4")
+    # A name merged with the one above it in the source.
+    cypress = by_number["56.59907"]
+    assert cypress["name"] == "Cyprus Trees" and cypress["details"] == "Set of 3"
+    assert "Star Of Wonder" in cypress["source_text"]
+
+    issues = (DATA / "holy_land_source_issues.txt").read_text()
+    assert "56.59799 Herod's Temple" in issues and "56.59907" in issues and "56.59912" in issues
 
 
 def test_general_accessories_spot_checks():
@@ -150,7 +188,7 @@ def test_parse_rejects_duplicate_keys_and_missing_columns(tmp_path):
 
 def test_check_command(tmp_path, capsys):
     assert catalog.main(["check", str(DATA)]) == 0
-    assert "1949 catalog rows are valid" in capsys.readouterr().out
+    assert "1993 catalog rows are valid" in capsys.readouterr().out
     write_csv(tmp_path, GOOD.replace("House", ""))
     assert catalog.main(["check", str(tmp_path)]) == 1
 
@@ -197,10 +235,10 @@ class LockConn:
 def test_sync_batches_and_commits():
     rows = catalog.load_directory(DATA)
     conn = LockConn()
-    assert catalog.sync(conn, rows, batch_size=300) == 1949
-    assert conn.batches == [300] * 6 + [149] and conn.committed
+    assert catalog.sync(conn, rows, batch_size=300) == 1993
+    assert conn.batches == [300] * 6 + [193] and conn.committed
     unlist = [s for s in conn.statements if s.startswith("UPDATE catalog_items SET listed = 0")]
-    assert len(unlist) == 1 and unlist[0].count("%s") == 1949
+    assert len(unlist) == 1 and unlist[0].count("%s") == 1993
 
 
 def test_sync_requires_lock():
@@ -252,7 +290,7 @@ def test_search_result_shape(logged_in, seeded):
     assert resp.headers["Cache-Control"] == "private, no-store"
     (r,) = resp.get_json()["results"]
     assert r == {
-        "id": seeded["acc"], "list": "accessories", "list_label": "Accessories", "item_number": "56.58539", "name": "The Big Prize Turkey",
+        "id": seeded["acc"], "list": "accessories", "list_label": "Accessories", "village": None, "item_number": "56.58539", "name": "The Big Prize Turkey",
         "details": None, "series": "A Christmas Carol", "year_issued": 2001, "year_retired": 2008,
         "is_current": False, "listed": True, "srp_usd": "27.50", "srp_cad": "44.00", "category": "accessory", "parent_name": None,
         "url": f"/catalog/{seeded['acc']}", "photo_count": 0, "thumb_url": None,

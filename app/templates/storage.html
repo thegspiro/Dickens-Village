@@ -2,14 +2,14 @@
 {% block title %}Storage{% endblock %}
 {% block content %}
 <div class="title-row">
-  <h1>Storage</h1>
+  <h1>Storage <span class="muted">· {{ village_name(current_village()) }}</span></h1>
   <div class="actions"><a class="button" href="{{ url_for('main.place_new') }}">Add a place</a></div>
 </div>
 <p class="muted">Where your pieces are kept and displayed. Places can go inside each other as deep as you need, for example Garage › Cabinet 2 › Drawer 3 › Spot B. The counts include the places inside.</p>
-{% if tree | length %}
+{% if roots %}
 <section class="card">
   <ul class="place-tree">
-  {%- for pid in tree.children.get(None, []) recursive %}
+  {%- for pid in roots recursive %}
     {%- set p = tree.by_id[pid] %}
     {%- set t = totals[pid] %}
     <li>
@@ -25,7 +25,7 @@
   </ul>
 </section>
 {% else %}
-<p class="card">No storage places yet. <a href="{{ url_for('main.place_new') }}">Add your first place</a>, such as a room, a cabinet or a tub.</p>
+<p class="card">No storage places in {{ village_name(current_village()) }} yet. <a href="{{ url_for('main.place_new') }}">Add your first place</a>, such as a room, a cabinet or a tub.</p>
 {% endif %}
 <p>{% if unplaced %}<a href="{{ url_for('main.item_list', unstored='yes') }}">{{ unplaced }} piece{{ '' if unplaced == 1 else 's' }} not assigned to storage</a>{% else %}<span class="muted">Every piece has a storage place.</span>{% endif %}</p>
 {% endblock %}

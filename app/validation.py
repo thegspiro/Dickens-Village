@@ -22,6 +22,14 @@ CONDITIONS: dict[str, str] = {
     "damaged": "Damaged",
 }
 
+# The villages kept apart in the tracker: each has its own pieces, storage places
+# and reference lists. Matches the ENUMs added by migration 0010.
+VILLAGES: dict[str, str] = {
+    "dickens": "Dickens' Village",
+    "holy-land": "Holy Land Village",
+}
+DEFAULT_VILLAGE = "dickens"  # pieces and places from before villages existed
+
 MIN_YEAR = 1900
 MAX_MONEY = Decimal("99999999.99")  # DECIMAL(10, 2)
 
@@ -42,6 +50,7 @@ MAX_INCHES = Decimal("999.999")  # DECIMAL(6, 3): keeps eighths and sixteenths o
 
 ITEM_COLUMNS = (
     "category",
+    "village",
     *ITEM_TEXT_FIELDS,
     *ITEM_LONG_TEXT_FIELDS,
     "year_introduced",
@@ -215,16 +224,20 @@ def _place_id(form: Mapping[str, str], key: str, errors: dict[str, str]) -> int 
     return value
 
 
-def parse_item_form(form: Mapping[str, str], legacy_storage: bool = False) -> tuple[dict[str, Any], dict[str, str]]:
+def parse_item_form(form: Mapping[str, str], legacy_storage: bool = False,
+                    default_village: str = DEFAULT_VILLAGE) -> tuple[dict[str, Any], dict[str, str]]:
     """Return (clean_data, errors). clean_data has exactly the ITEM_COLUMNS keys.
 
     The storage text columns are read from the form only with legacy_storage
     (values sent by an older phone app); otherwise they are left blank, and
-    the repository fills them in from the storage place.
+    the repository fills them in from the storage place. A form without a
+    village (an older phone app, or a form that doesn't offer the choice)
+    gets default_village.
     """
     errors: dict[str, str] = {}
     data: dict[str, Any] = {
         "category": _choice(form, "category", CATEGORIES, errors, required=True),
+        "village": _choice(form, "village", VILLAGES, errors, required=False) or default_village,
     }
     for key, max_len in ITEM_TEXT_FIELDS.items():
         if key in STORAGE_COLUMNS and not legacy_storage:
@@ -293,8 +306,15 @@ def parse_extra_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str,
 PLACE_TEXT_FIELDS: dict[str, int] = {"name": 120, "kind": 40}
 
 
+def parse_village(raw: str | None) -> str | None:
+    """A village key from a form or query string, or None if it isn't one."""
+    value = (raw or "").strip()
+    return value if value in VILLAGES else None
+
+
 def parse_place_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
-    """A storage place: name (required), type, parent, whether it's a display spot, notes."""
+    """A storage place: name (required), type, parent, whether it's a display spot, notes.
+    Its village is not on the form: it is the village the place is created in."""
     errors: dict[str, str] = {}
     data: dict[str, Any] = {key: _text(form, key, n, errors) for key, n in PLACE_TEXT_FIELDS.items()}
     if data["name"] is None and "name" not in errors:

@@ -2,7 +2,7 @@
 {% from "_macros.html" import condition_badge, storage_text %}
 {% block title %}Collection{% endblock %}
 {% block content %}
-<h1>Collection <span class="muted">({{ total }} piece{{ '' if total == 1 else 's' }})</span></h1>
+<h1>Collection <span class="muted">· {{ village_name(current_village()) }} ({{ total }} piece{{ '' if total == 1 else 's' }})</span></h1>
 
 <form method="get" action="{{ url_for('main.item_list') }}" class="filters card">
   <div class="grid">

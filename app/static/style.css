@@ -34,6 +34,13 @@ h3 { font-size: 1rem; margin: 1.25rem 0 .5rem; }
 .site-header .button { background: var(--accent-ink); color: var(--accent); }
 .site-header button.link { color: var(--accent-ink); }
 
+/* Village switcher: one button per village, the current one filled in. */
+.village-switch { display: inline-flex; border: 1px solid var(--accent-ink); border-radius: 6px; overflow: hidden; }
+.village-switch button { margin: 0; border-radius: 0; background: transparent; color: var(--accent-ink);
+  font-weight: normal; padding: .3rem .7rem; }
+.village-switch button.current { background: var(--accent-ink); color: var(--accent); font-weight: 600; }
+.village-switch button:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -4px; }
+
 main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: 1.25rem; }

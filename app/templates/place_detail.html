@@ -4,7 +4,7 @@
 {% block title %}{{ title }}{% endblock %}
 {% block content %}
 <nav class="breadcrumbs" aria-label="Where this place is">
-  <a href="{{ url_for('main.storage') }}">Storage</a>
+  <a href="{{ url_for('main.storage') }}">Storage</a> <span class="muted">({{ village_name(tree.village_of(place.id)) }})</span>
   {% for p in tree.path(place.id)[:-1] %} › <a href="{{ url_for('main.place_detail', place_id=p.id) }}">{{ p | place_label }}</a>{% endfor %}
 </nav>
 <div class="title-row">

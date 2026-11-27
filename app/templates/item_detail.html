@@ -15,6 +15,7 @@
   <section class="card">
     <h2>Details</h2>
     <dl class="details">
+      <dt>Village</dt><dd>{{ village_name(item.village) }}{% if item.village != current_village() %} <span class="muted">(you're viewing {{ village_name(current_village()) }})</span>{% endif %}</dd>
       <dt>Item number</dt><dd>{{ item.item_number or '—' }}</dd>
       {% if catalog %}
       <dt>Catalog listing</dt>
@@ -143,7 +144,7 @@
       <div>{{ text(extra_form, extra_errors, 'quantity', 'Quantity', 3, extra='inputmode="numeric" placeholder="1"') }}</div>
       <div>{{ select(extra_form, extra_errors, 'condition_grade', 'Condition', CONDITIONS, blank='Not graded') }}</div>
       <div class="wide">{{ text(extra_form, extra_errors, 'notes', 'Notes', 1000) }}</div>
-      <div class="wide">{{ place_select(extra_form, extra_errors, 'storage_place_id', 'Stored in', place_options(False), 'With the piece') }}</div>
+      <div class="wide">{{ place_select(extra_form, extra_errors, 'storage_place_id', 'Stored in', place_options(False, item.village), 'With the piece') }}</div>
     </div>
     <button type="submit">Add extra</button>
   </form>

@@ -9,12 +9,18 @@ unless the name already starts with it: kind "Drawer" + name "3" reads
 "Drawer 3", and kind "Drawer" + name "Drawer 3" also reads "Drawer 3".
 Places with a name of their own ("Garage", "Hall closet") usually have no
 type.
+
+Each place belongs to one village (its "village" value); the places inside
+it are in the same village. Rows without a village are Dickens' Village,
+as every place was before villages existed.
 """
 
 from __future__ import annotations
 
 import re
 from typing import Any, Iterable, Iterator
+
+DEFAULT_VILLAGE = "dickens"  # same as validation.DEFAULT_VILLAGE
 
 SEPARATOR = " › "
 MAX_DEPTH = 12
@@ -57,6 +63,16 @@ class PlaceTree:
 
     def get(self, place_id: int | None) -> dict[str, Any] | None:
         return self.by_id.get(place_id) if place_id is not None else None
+
+    def village_of(self, place_id: int | None) -> str | None:
+        """The village a place belongs to, or None if there is no such place."""
+        place = self.get(place_id)
+        return None if place is None else str(place.get("village") or DEFAULT_VILLAGE)
+
+    def roots(self, village: str | None = None) -> list[int]:
+        """Top-level places in display order; with village, only that village's."""
+        ids = self.children.get(None, [])
+        return [i for i in ids if village is None or self.village_of(i) == village]
 
     def path(self, place_id: int | None) -> list[dict[str, Any]]:
         """The places from the top level down to this one (empty if unknown)."""
@@ -108,17 +124,21 @@ class PlaceTree:
             stack.extend(reversed(self.children.get(current, [])))
         return out
 
-    def walk(self, place_id: int | None = None, depth: int = 0) -> Iterator[tuple[dict[str, Any], int]]:
-        """Every place under place_id (the whole tree for None) with its depth, in display order."""
-        for child in self.children.get(place_id, []):
+    def walk(self, place_id: int | None = None, depth: int = 0,
+             village: str | None = None) -> Iterator[tuple[dict[str, Any], int]]:
+        """Every place under place_id (the whole tree for None) with its depth, in display order.
+        With village, only that village's places (at the top level; the rest follow their parent)."""
+        children = self.roots(village) if place_id is None else self.children.get(place_id, [])
+        for child in children:
             yield self.by_id[child], depth
             yield from self.walk(child, depth + 1)
 
-    def options(self, display: bool | None = None) -> list[tuple[int, str]]:
+    def options(self, display: bool | None = None, village: str | None = None) -> list[tuple[int, str]]:
         """(id, full path) for a picker, in tree order. display=True or False keeps only
-        display places or only storage places; None keeps both."""
+        display places or only storage places; None keeps both. With village, only that
+        village's places."""
         out = []
-        for row, _depth in self.walk():
+        for row, _depth in self.walk(village=village):
             if display is None or bool(row.get("is_display")) == display:
                 out.append((int(row["id"]), self.path_text(int(row["id"]))))
         return out
@@ -131,6 +151,8 @@ class PlaceTree:
             return "That place no longer exists."
         if new_parent_id in self.descendants(place_id):
             return "A place can't go inside itself or one of the places inside it."
+        if self.village_of(new_parent_id) != self.village_of(place_id):
+            return "A place can only go inside a place in the same village."
         if self.depth(new_parent_id) + self.subtree_height(place_id) > MAX_DEPTH:
             return f"Places can be nested at most {MAX_DEPTH} levels deep."
         return None

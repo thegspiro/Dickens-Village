@@ -57,6 +57,28 @@ GENERAL_2021_OVERRIDES = {
     },
 }
 
+# Holy Land collection. The two merged names repeat the name of the line above.
+HOLY_LAND_OVERRIDES = {
+    ('holy-land-accessories', '56.59907', '"Cyprus Trees"Star Of Wonder"'): {
+        'title': '"Cyprus Trees" Set of 3',
+        'report': 'source text reads "Cyprus Trees"Star Of Wonder" Set of 3; '
+                  '"Star Of Wonder" is the name of 56.59906 on the line above',
+    },
+    ('holy-land-accessories', '56.59912', '"Olive Harvest"Limestone Outcropping"'): {
+        'title': '"Olive Harvest" Set of 3',
+        'report': 'source text reads "Olive Harvest"Limestone Outcropping" Set of 3; '
+                  '"Limestone Outcropping" is the name of 56.59911 on the line above',
+    },
+}
+
+# Series for each Holy Land PDF section heading.
+HOLY_LAND_SECTIONS = {
+    'Holy Land™ Collection Little Town Of Bethlehem™ Series Lighted Items': 'Little Town Of Bethlehem',
+    'Holy Land™ Collection Little Town Of Bethlehem™ Series Resin Accessories': 'Little Town Of Bethlehem',
+    'Holy Land™ Collection The Easter Story™ Series Lighted Items': 'The Easter Story',
+    'Holy Land™ Collection Parables Of Jesus™': 'Parables Of Jesus',
+}
+
 SERIES_PATTERNS = [
     (re.compile(r'christmas carol|\(CC\)', re.I), 'A Christmas Carol'),
     (re.compile(r'12th night|twelfth night', re.I), '12th Night'),
@@ -90,6 +112,14 @@ PROFILES = {
         'sources': {'general': ('general-accessories', 'general-2021', 'accessory')},
         'overrides': GENERAL_2021_OVERRIDES, 'drop': set(), 'sections': None,
         'years': (1975, 2021), 'checks': True,
+    },
+    'holy-land': {
+        'sources': {
+            'holy-land-lighted': ('holy-land-lighted', 'holy-land-lighted', 'building'),
+            'holy-land-accessories': ('holy-land-accessories', 'holy-land-accessories', 'accessory'),
+        },
+        'overrides': HOLY_LAND_OVERRIDES, 'drop': set(), 'sections': HOLY_LAND_SECTIONS,
+        'years': (1980, 2026), 'checks': True,
     },
 }
 

@@ -36,6 +36,7 @@ CATEGORIES = {"building", "figure", "accessory"}
 COLUMNS = (
     "source_key",
     "list_name",
+    "village",
     "item_number",
     "name",
     "details",
@@ -66,6 +67,17 @@ LIST_LABELS = {
     "lighted": "Lighted",
     "accessories": "Accessories",
     "general-accessories": "General Village Accessories",
+    "holy-land-lighted": "Holy Land Lighted",
+    "holy-land-accessories": "Holy Land Resin Accessories",
+}
+
+# The village each list belongs to (a key of validation.VILLAGES). A list that
+# isn't here, such as the General Village Accessories, is offered in every village.
+LIST_VILLAGES = {
+    "lighted": "dickens",
+    "accessories": "dickens",
+    "holy-land-lighted": "holy-land",
+    "holy-land-accessories": "holy-land",
 }
 
 
@@ -150,9 +162,11 @@ def parse_rows(path: Path) -> list[CatalogRow]:
             retired = _year(raw["year_retired"], "year_retired", where)
             if issued and retired and retired < issued:
                 raise CatalogError(f"{where}: year_retired is before year_issued")
+            list_name = raw["list"].strip() or path.stem
             rows.append(CatalogRow({
                 "source_key": key,
-                "list_name": raw["list"].strip() or path.stem,
+                "list_name": list_name,
+                "village": LIST_VILLAGES.get(list_name),
                 "item_number": _opt(raw["item_number"]),
                 "name": name,
                 "details": _opt(raw["details"]),

@@ -180,7 +180,11 @@
 
     function search(query) {
       var seq = ++requestSeq;
-      fetch(searchUrl + "?q=" + encodeURIComponent(query), {
+      // Look up in the lists of the village chosen on the form, when it has one.
+      var village = doc.getElementById("village");
+      var url = searchUrl + "?q=" + encodeURIComponent(query) +
+        (village && village.value ? "&village=" + encodeURIComponent(village.value) : "");
+      fetch(url, {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       })

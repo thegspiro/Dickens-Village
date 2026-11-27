@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
 from .places import PlaceTree, legacy_path
-from .validation import ITEM_COLUMNS, STORAGE_COLUMNS
+from .validation import DEFAULT_VILLAGE, ITEM_COLUMNS, STORAGE_COLUMNS
 
 log = logging.getLogger("dickens.repository")
 
@@ -46,7 +46,7 @@ _PHOTOS_FINGERPRINT = (
 
 
 _CATALOG_FIELDS = (
-    "c.id, c.list_name, c.item_number, c.name, c.details, c.series, c.year_issued, "
+    "c.id, c.list_name, c.village, c.item_number, c.name, c.details, c.series, c.year_issued, "
     "c.year_retired, c.is_current, c.listed, c.srp_usd, c.srp_cad, c.default_category, "
     "p.name AS parent_name, p.item_number AS parent_item_number, "
     "(SELECT cp.id FROM catalog_photos cp WHERE cp.catalog_id = c.id ORDER BY cp.sort_order, cp.id LIMIT 1) AS photo_id, "
@@ -70,7 +70,8 @@ class DuplicatePlace(Exception):
 
 EXTRA_COLUMNS = ("description", "quantity", "condition_grade", "notes", "storage_place_id")
 
-_PLACE_COLUMNS = ("parent_id", "name", "kind", "is_display", "notes")
+_PLACE_COLUMNS = ("parent_id", "name", "kind", "is_display", "notes")  # what an edit can change
+_NEW_PLACE_COLUMNS = ("village", *_PLACE_COLUMNS)  # a place's village is set when it is created
 
 # Fingerprint of the places table for ETags.
 _PLACES_FINGERPRINT = (
@@ -133,6 +134,9 @@ class MySQLRepository:
         where: list[str] = []
         params: list[Any] = []
 
+        if filters.get("village"):
+            where.append("i.village = %s")
+            params.append(filters["village"])
         if filters.get("q"):
             like = f"%{_like_escape(filters['q'])}%"
             where.append("(i.name LIKE %s OR i.item_number LIKE %s OR i.series LIKE %s)")
@@ -156,7 +160,7 @@ class MySQLRepository:
         if filters.get("unstored"):
             where.append("i.storage_place_id IS NULL")
         if filters.get("place"):
-            tree = PlaceTree(self._all("SELECT id, parent_id, name, kind FROM storage_places"))
+            tree = PlaceTree(self._all("SELECT id, village, parent_id, name, kind FROM storage_places"))
             ids = tree.descendants(filters["place"]) if filters["place"] in tree else []
             if ids:
                 where.append(f"i.storage_place_id IN ({', '.join(['%s'] * len(ids))})")
@@ -289,7 +293,7 @@ class MySQLRepository:
         photos = self._all("SELECT id, item_id, client_uuid, caption FROM item_photos "
                            "ORDER BY item_id, sort_order, id")
         scans = self._all("SELECT id, item_id FROM item_scans ORDER BY item_id, id")
-        places = self._all("SELECT id, parent_id, name, kind, is_display FROM storage_places ORDER BY id")
+        places = self._all("SELECT id, village, parent_id, name, kind, is_display FROM storage_places ORDER BY id")
         self._end_read()
         return {"items": items, "extras": extras, "photos": photos, "scans": scans, "places": places}
 
@@ -463,32 +467,35 @@ class MySQLRepository:
         return rows
 
     def link_candidates(self, item: dict[str, Any]) -> list[dict[str, Any]]:
+        """Pieces this one can be linked to: in the same village, buildings for a figure
+        or accessory and the other way round."""
         if item["category"] == "building":
             sql = (
-                "SELECT id, name, category, item_number FROM items WHERE category <> 'building' "
+                "SELECT id, name, category, item_number FROM items WHERE category <> 'building' AND village = %s "
                 "AND id NOT IN (SELECT item_id FROM item_links WHERE building_id = %s) "
                 "ORDER BY name, id LIMIT 2000"
             )
         else:
             sql = (
-                "SELECT id, name, category, item_number FROM items WHERE category = 'building' "
+                "SELECT id, name, category, item_number FROM items WHERE category = 'building' AND village = %s "
                 "AND id NOT IN (SELECT building_id FROM item_links WHERE item_id = %s) "
                 "ORDER BY name, id LIMIT 2000"
             )
-        rows = self._all(sql, (item["id"],))
+        rows = self._all(sql, (item["village"], item["id"]))
         self._end_read()
         return rows
 
     def add_link(self, id_a: int, id_b: int) -> bool:
-        """Link a building with a non-building item, in either argument order."""
+        """Link a building with a non-building item of the same village, in either argument order."""
         if id_a == id_b:
             return False
         with self._write() as cur:
             cur.execute(
-                "SELECT id, category FROM items WHERE id IN (%s, %s) FOR UPDATE", (id_a, id_b)
+                "SELECT id, category, village FROM items WHERE id IN (%s, %s) FOR UPDATE", (id_a, id_b)
             )
-            rows = {row["id"]: row["category"] for row in cur.fetchall()}
-            if len(rows) != 2:
+            found = cur.fetchall()
+            rows = {row["id"]: row["category"] for row in found}
+            if len(rows) != 2 or len({row["village"] for row in found}) != 1:
                 return False
             buildings = [i for i, cat in rows.items() if cat == "building"]
             if len(buildings) != 1:
@@ -625,6 +632,13 @@ class MySQLRepository:
     # -- reference catalog ----------------------------------------------------
 
     @staticmethod
+    def _village_filter(village: str | None) -> tuple[str, list[Any]]:
+        """Catalog entries for a village: its own lists and the lists for every village."""
+        if village is None:
+            return "1 = 1", []
+        return "(c.village IS NULL OR c.village = %s)", [village]
+
+    @staticmethod
     def _catalog_match(query: str) -> tuple[str, list[Any], str, list[Any]]:
         """WHERE fragment and ORDER BY fragment (with their parameters) that find
         catalog entries by item number (ranked first) or name."""
@@ -647,40 +661,50 @@ class MySQLRepository:
         )
         return f"({' OR '.join(where)})", params, order, [query, prefix, like, prefix]
 
-    def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
+    def search_catalog(self, query: str, limit: int = 15, village: str | None = None) -> list[dict[str, Any]]:
         """Find catalog entries by item number (ranked first) or name; entries
-        removed from the CSVs (listed = 0) are left out."""
+        removed from the CSVs (listed = 0) are left out. With village, only
+        entries for that village or for every village."""
         query = " ".join(query.split())[:100]
         if len(query) < 2:
             return []
         match, params, order, order_params = self._catalog_match(query)
+        village_sql, village_params = self._village_filter(village)
         sql = (
             f"SELECT {_CATALOG_FIELDS} FROM catalog_items c "
             "LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
-            f"WHERE c.listed = 1 AND {match} "
+            f"WHERE c.listed = 1 AND {village_sql} AND {match} "
             f"ORDER BY {order}c.parent_key IS NOT NULL, c.item_number, c.source_key "
             "LIMIT %s"
         )
-        rows = self._all(sql, [*params, *order_params, limit])
+        rows = self._all(sql, [*village_params, *params, *order_params, limit])
         self._end_read()
         return rows
 
     def browse_catalog(self, query: str = "", missing_photos: bool = False, owned_only: bool = False,
-                       limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+                       limit: int = 100, offset: int = 0, village: str | None = None
+                       ) -> tuple[list[dict[str, Any]], int]:
         """The Catalog page: optional search, optionally only entries with no
         reference photo and/or only entries a piece in the collection is linked
-        to. Returns (rows, total). Each row also has owned_count.
+        to. Returns (rows, total). Each row also has owned_count. With village,
+        only entries for that village or for every village (and owned_only and
+        owned_count count that village's pieces).
 
         Entries removed from the CSVs are left out, as in the lookup. With
         either filter on, those a piece is linked to are included: they still
         need photos for that piece.
         """
         query = " ".join(query.split())[:100]
+        owner_sql = "i.catalog_id = c.id" + (" AND i.village = %s" if village else "")
+        owner_params: list[Any] = [village] if village else []
+        village_sql, village_params = self._village_filter(village)
+        where = [village_sql]
+        params: list[Any] = [*village_params]
         if missing_photos or owned_only:
-            where = ["(c.listed = 1 OR EXISTS (SELECT 1 FROM items i WHERE i.catalog_id = c.id))"]
+            where.append(f"(c.listed = 1 OR EXISTS (SELECT 1 FROM items i WHERE {owner_sql}))")
+            params += owner_params
         else:
-            where = ["c.listed = 1"]
-        params: list[Any] = []
+            where.append("c.listed = 1")
         order, order_params = "", []
         if query:
             match, match_params, order, order_params = self._catalog_match(query)
@@ -689,17 +713,18 @@ class MySQLRepository:
         if missing_photos:
             where.append("NOT EXISTS (SELECT 1 FROM catalog_photos cp WHERE cp.catalog_id = c.id)")
         if owned_only:
-            where.append("EXISTS (SELECT 1 FROM items i WHERE i.catalog_id = c.id)")
+            where.append(f"EXISTS (SELECT 1 FROM items i WHERE {owner_sql})")
+            params += owner_params
         where_sql = " AND ".join(where)
         total = self._one(f"SELECT COUNT(*) AS n FROM catalog_items c WHERE {where_sql}", params)
         rows = self._all(
             f"SELECT {_CATALOG_FIELDS}, "
-            "(SELECT COUNT(*) FROM items i WHERE i.catalog_id = c.id) AS owned_count "
+            f"(SELECT COUNT(*) FROM items i WHERE {owner_sql}) AS owned_count "
             "FROM catalog_items c LEFT JOIN catalog_items p ON p.source_key = c.parent_key "
             f"WHERE {where_sql} "
             f"ORDER BY {order}c.parent_key IS NOT NULL, c.item_number IS NULL, c.item_number, c.source_key "
             "LIMIT %s OFFSET %s",
-            [*params, *order_params, limit, offset],
+            [*owner_params, *params, *order_params, limit, offset],
         )
         self._end_read()
         return rows, int(total["n"]) if total else 0
@@ -770,7 +795,7 @@ class MySQLRepository:
     def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
         """Pieces in the collection linked to a catalog entry."""
         rows = self._all(
-            "SELECT id, name, category, condition_grade, storage_location, storage_tub, storage_tray, "
+            "SELECT id, name, category, village, condition_grade, storage_location, storage_tub, storage_tray, "
             "storage_place_id, display_place_id, on_display FROM items WHERE catalog_id = %s ORDER BY name, id",
             (catalog_id,),
         )
@@ -782,7 +807,7 @@ class MySQLRepository:
     def _read_places(self, cur: Any) -> PlaceTree:
         """Every place, share-locked until the transaction ends, so a rename or move
         can't change a path while a piece is being saved against it."""
-        cur.execute("SELECT id, parent_id, name, kind, is_display FROM storage_places FOR SHARE")
+        cur.execute("SELECT id, village, parent_id, name, kind, is_display FROM storage_places FOR SHARE")
         return PlaceTree(cur.fetchall())
 
     def _apply_storage(self, cur: Any, data: dict[str, Any]) -> dict[str, Any]:
@@ -797,21 +822,21 @@ class MySQLRepository:
         tree = self._read_places(cur)
         if legacy:
             steps = legacy_path(data.get("storage_location"), data.get("storage_tub"), data.get("storage_tray"))
-            data["storage_place_id"] = self._find_or_create_path(cur, steps)
+            data["storage_place_id"] = self._find_or_create_path(cur, steps, data["village"])
             tree = self._read_places(cur)
         place_id = data.get("storage_place_id")
         data["storage_location"], data["storage_tub"], data["storage_tray"] = tree.legacy(place_id)
         return data
 
-    def _find_or_create_path(self, cur: Any, steps: list[tuple[str, str | None]]) -> int | None:
+    def _find_or_create_path(self, cur: Any, steps: list[tuple[str, str | None]], village: str) -> int | None:
         parent: int | None = None
         for name, kind in steps:
-            cur.execute("SELECT id FROM storage_places WHERE parent_key = %s AND name = %s FOR UPDATE",
-                        (parent or 0, name))
+            cur.execute("SELECT id FROM storage_places WHERE village = %s AND parent_key = %s AND name = %s FOR UPDATE",
+                        (village, parent or 0, name))
             row = cur.fetchone()
             if row is None:
-                cur.execute("INSERT INTO storage_places (parent_id, name, kind) VALUES (%s, %s, %s)",
-                            (parent, name, kind))
+                cur.execute("INSERT INTO storage_places (village, parent_id, name, kind) VALUES (%s, %s, %s, %s)",
+                            (village, parent, name, kind))
                 parent = int(cur.lastrowid)
                 log.info("Created storage place id=%s from an older phone app's Location/Tub/Tray", parent)
             else:
@@ -819,8 +844,8 @@ class MySQLRepository:
         return parent
 
     def list_places(self) -> list[dict[str, Any]]:
-        """Every place, with how many pieces are stored in it (items), displayed
-        in it (displayed) and how many extras are stored in it (extras)."""
+        """Every place (of every village), with how many pieces are stored in it
+        (items), displayed in it (displayed) and how many extras are stored in it (extras)."""
         rows = self._all(
             "SELECT p.*, "
             "(SELECT COUNT(*) FROM items i WHERE i.storage_place_id = p.id) AS items, "
@@ -837,18 +862,24 @@ class MySQLRepository:
         return row
 
     def create_place(self, data: dict[str, Any]) -> int | None:
-        """Add a place. Returns None if its parent no longer exists; raises
-        DuplicatePlace if the parent already has a place with that name."""
+        """Add a place in data["village"]; a place inside another takes its parent's
+        village. Returns None if its parent no longer exists; raises DuplicatePlace
+        if the parent already has a place with that name."""
+        data = dict(data)
+        data["village"] = data.get("village") or DEFAULT_VILLAGE
         try:
             with self._write() as cur:
                 if data.get("parent_id") is not None:
-                    cur.execute("SELECT id FROM storage_places WHERE id = %s FOR UPDATE", (data["parent_id"],))
-                    if cur.fetchone() is None:
+                    cur.execute("SELECT id, village FROM storage_places WHERE id = %s FOR UPDATE",
+                                (data["parent_id"],))
+                    parent = cur.fetchone()
+                    if parent is None:
                         return None
+                    data["village"] = parent["village"]
                 cur.execute(
-                    f"INSERT INTO storage_places ({', '.join(_PLACE_COLUMNS)}) "
-                    f"VALUES ({', '.join(['%s'] * len(_PLACE_COLUMNS))})",
-                    [data.get(c) for c in _PLACE_COLUMNS],
+                    f"INSERT INTO storage_places ({', '.join(_NEW_PLACE_COLUMNS)}) "
+                    f"VALUES ({', '.join(['%s'] * len(_NEW_PLACE_COLUMNS))})",
+                    [data.get(c) for c in _NEW_PLACE_COLUMNS],
                 )
                 new_id = int(cur.lastrowid)
         except Exception as exc:
@@ -868,7 +899,7 @@ class MySQLRepository:
         """
         try:
             with self._write() as cur:
-                cur.execute("SELECT id, parent_id, name, kind, is_display FROM storage_places FOR UPDATE")
+                cur.execute("SELECT id, village, parent_id, name, kind, is_display FROM storage_places FOR UPDATE")
                 tree = PlaceTree(cur.fetchall())
                 if place_id not in tree:
                     return "missing"
@@ -883,7 +914,7 @@ class MySQLRepository:
                     f"UPDATE storage_places SET {', '.join(f'{c} = %s' for c in _PLACE_COLUMNS)} WHERE id = %s",
                     [*[data.get(c) for c in _PLACE_COLUMNS], place_id],
                 )
-                cur.execute("SELECT id, parent_id, name, kind, is_display FROM storage_places")
+                cur.execute("SELECT id, village, parent_id, name, kind, is_display FROM storage_places")
                 self._refresh_legacy(cur, PlaceTree(cur.fetchall()), place_id)
         except Exception as exc:
             if _is_duplicate_key(exc):
@@ -977,7 +1008,7 @@ class MySQLRepository:
                     "SELECT id, item_id, filename, original_name, size_bytes, created_at "
                     "FROM item_scans ORDER BY item_id, id"),
                 "places": self._all(
-                    "SELECT id, parent_id, name, kind, is_display, notes FROM storage_places ORDER BY id"),
+                    "SELECT id, village, parent_id, name, kind, is_display, notes FROM storage_places ORDER BY id"),
                 "catalog_photos": self._all(
                     "SELECT p.id, p.catalog_id, p.filename, p.original_name, p.sort_order, p.caption, p.created_at, "
                     "c.item_number, c.name FROM catalog_photos p JOIN catalog_items c ON c.id = p.catalog_id "
@@ -1000,28 +1031,38 @@ class MySQLRepository:
 
     # -- summaries ------------------------------------------------------------
 
-    def count_unplaced(self) -> int:
-        """Pieces with no storage place."""
-        row = self._one("SELECT COUNT(*) AS n FROM items WHERE storage_place_id IS NULL")
+    def count_unplaced(self, village: str | None = None) -> int:
+        """Pieces with no storage place (in one village, or in all)."""
+        if village is None:
+            row = self._one("SELECT COUNT(*) AS n FROM items WHERE storage_place_id IS NULL")
+        else:
+            row = self._one("SELECT COUNT(*) AS n FROM items WHERE storage_place_id IS NULL AND village = %s",
+                            (village,))
         self._end_read()
         return int(row["n"]) if row else 0
 
-    def collection_summary(self) -> dict[str, Any]:
+    def collection_summary(self, village: str | None = None) -> dict[str, Any]:
+        """Totals for one village's pieces (or every piece with village None)."""
+        where, params = ("WHERE village = %s", [village]) if village else ("", [])
         by_category = self._all(
             "SELECT category, COUNT(*) AS item_count, COALESCE(SUM(price_paid), 0) AS total_paid, "
-            "COALESCE(SUM(estimated_value), 0) AS total_value FROM items GROUP BY category ORDER BY category"
+            f"COALESCE(SUM(estimated_value), 0) AS total_value FROM items {where} GROUP BY category ORDER BY category",
+            params,
         )
         by_condition = self._all(
-            "SELECT condition_grade, COUNT(*) AS item_count FROM items "
-            "GROUP BY condition_grade ORDER BY condition_grade IS NULL, condition_grade"
+            f"SELECT condition_grade, COUNT(*) AS item_count FROM items {where} "
+            "GROUP BY condition_grade ORDER BY condition_grade IS NULL, condition_grade",
+            params,
         )
         totals = self._one(
             "SELECT COUNT(*) AS item_count, COALESCE(SUM(price_paid), 0) AS total_paid, "
             "COALESCE(SUM(estimated_value), 0) AS total_value, "
             "COALESCE(SUM(on_display), 0) AS on_display, "
             "COALESCE(SUM(has_original_box), 0) AS with_box, "
-            "(SELECT COALESCE(SUM(quantity), 0) FROM item_extras) AS extras_count "
-            "FROM items"
+            "(SELECT COALESCE(SUM(e.quantity), 0) FROM item_extras e JOIN items x ON x.id = e.item_id "
+            + ("WHERE x.village = %s" if village else "") + ") AS extras_count "
+            f"FROM items {where}",
+            [*params, *params],
         )
         self._end_read()
         return {"by_category": by_category, "by_condition": by_condition, "totals": totals}

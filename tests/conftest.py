@@ -65,6 +65,8 @@ class FakeRepository:
 
     def list_items(self, filters: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
         rows = [self._with_counts(i) for i in self.items.values()]
+        if filters.get("village"):
+            rows = [r for r in rows if r.get("village", "dickens") == filters["village"]]
         if filters.get("q"):
             q = filters["q"].lower()
             rows = [r for r in rows if any(q in (r.get(k) or "").lower() for k in ("name", "item_number", "series"))]
@@ -100,12 +102,15 @@ class FakeRepository:
     def _apply_storage(self, data: dict[str, Any]) -> dict[str, Any]:
         """Same rules as MySQLRepository._apply_storage."""
         data = dict(data)
+        data.setdefault("village", "dickens")
         if data.pop("_legacy_storage", False):
             parent = None
             for name, kind in legacy_path(*(data.get(c) for c in STORAGE_COLUMNS)):
                 found = next((p["id"] for p in self.places.values()
-                              if p["parent_id"] == parent and p["name"].lower() == name.lower()), None)
-                parent = found or self.create_place({"parent_id": parent, "name": name, "kind": kind})
+                              if p["parent_id"] == parent and p["village"] == data["village"]
+                              and p["name"].lower() == name.lower()), None)
+                parent = found or self.create_place({"parent_id": parent, "name": name, "kind": kind,
+                                                     "village": data["village"]})
             data["storage_place_id"] = parent
         legacy = self._tree().legacy(data.get("storage_place_id"))
         data.update(zip(STORAGE_COLUMNS, legacy))
@@ -250,10 +255,13 @@ class FakeRepository:
         return [
             i for i in self.items.values()
             if (i["category"] == "building") == want_building and i["id"] not in linked
+            and i["village"] == item["village"]
         ]
 
     def add_link(self, id_a: int, id_b: int) -> bool:
         if id_a == id_b or id_a not in self.items or id_b not in self.items:
+            return False
+        if self.items[id_a]["village"] != self.items[id_b]["village"]:
             return False
         cats = {i: self.items[i]["category"] for i in (id_a, id_b)}
         buildings = [i for i, c in cats.items() if c == "building"]
@@ -320,7 +328,7 @@ class FakeRepository:
     def add_catalog(self, **fields: Any) -> int:
         new_id = next(self._ids)
         row = {
-            "id": new_id, "list_name": "lighted", "item_number": None, "name": "", "details": None,
+            "id": new_id, "list_name": "lighted", "village": None, "item_number": None, "name": "", "details": None,
             "series": None, "year_issued": None, "year_retired": None, "is_current": 0, "listed": 1,
             "srp_usd": None, "srp_cad": None, "default_category": None,
             "parent_name": None, "parent_item_number": None,
@@ -329,7 +337,7 @@ class FakeRepository:
         self.catalog[new_id] = row
         return new_id
 
-    def search_catalog(self, query: str, limit: int = 15) -> list[dict[str, Any]]:
+    def search_catalog(self, query: str, limit: int = 15, village: str | None = None) -> list[dict[str, Any]]:
         q = query.strip().lower()
         if len(q) < 2:
             return []
@@ -338,6 +346,8 @@ class FakeRepository:
         for row in self.catalog.values():
             if not row.get("listed", 1):
                 continue
+            if village is not None and row.get("village") not in (None, village):
+                continue
             number = (row["item_number"] or "").lower()
             if q in number or q in row["name"].lower() or (len(digits) >= 2 and digits in number.replace(".", "")):
                 rank = 0 if number == q else 1 if number.startswith(q) else 2 if q in number else 3
@@ -345,13 +355,14 @@ class FakeRepository:
         return [self._catalog_with_photos(h[3]) for h in sorted(hits, key=lambda h: h[:3])][:limit]
 
     def browse_catalog(self, query: str = "", missing_photos: bool = False, owned_only: bool = False,
-                       limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+                       limit: int = 100, offset: int = 0, village: str | None = None
+                       ) -> tuple[list[dict[str, Any]], int]:
         owned = {}
         for item in self.items.values():
-            if item.get("catalog_id"):
+            if item.get("catalog_id") and (village is None or item["village"] == village):
                 owned[item["catalog_id"]] = owned.get(item["catalog_id"], 0) + 1
         if query:
-            listed_hits = {r["id"] for r in self.search_catalog(query, limit=10_000)}
+            listed_hits = {r["id"] for r in self.search_catalog(query, limit=10_000, village=village)}
             q = query.strip().lower()
             rows = [r for r in self.catalog.values()
                     if r["id"] in listed_hits or (not r.get("listed", 1) and r["id"] in owned
@@ -359,6 +370,8 @@ class FakeRepository:
         else:
             rows = list(self.catalog.values())
         rows = [r for r in rows if r.get("listed", 1) or ((missing_photos or owned_only) and r["id"] in owned)]
+        if village is not None:
+            rows = [r for r in rows if r.get("village") in (None, village)]
         if missing_photos:
             rows = [r for r in rows if not self.list_catalog_photos(r["id"])]
         if owned_only:
@@ -412,8 +425,9 @@ class FakeRepository:
     def items_for_catalog(self, catalog_id: int) -> list[dict[str, Any]]:
         return sorted((i for i in self.items.values() if i.get("catalog_id") == catalog_id), key=lambda i: i["name"])
 
-    def count_unplaced(self) -> int:
-        return sum(1 for i in self.items.values() if not i.get("storage_place_id"))
+    def count_unplaced(self, village: str | None = None) -> int:
+        return sum(1 for i in self.items.values()
+                   if not i.get("storage_place_id") and (village is None or i["village"] == village))
 
     def list_places(self) -> list[dict[str, Any]]:
         out = []
@@ -428,17 +442,19 @@ class FakeRepository:
         p = self.places.get(place_id)
         return dict(p) if p else None
 
-    def _name_taken(self, parent_id: int | None, name: str, except_id: int | None = None) -> bool:
-        return any(p["parent_id"] == parent_id and p["name"].lower() == name.lower() and p["id"] != except_id
-                   for p in self.places.values())
+    def _name_taken(self, village: str, parent_id: int | None, name: str, except_id: int | None = None) -> bool:
+        return any(p["village"] == village and p["parent_id"] == parent_id and p["name"].lower() == name.lower()
+                   and p["id"] != except_id for p in self.places.values())
 
     def create_place(self, data: dict[str, Any]) -> int | None:
         if data.get("parent_id") is not None and data["parent_id"] not in self.places:
             return None
-        if self._name_taken(data.get("parent_id"), data["name"]):
+        village = (self.places[data["parent_id"]]["village"] if data.get("parent_id") is not None
+                   else data.get("village") or "dickens")
+        if self._name_taken(village, data.get("parent_id"), data["name"]):
             raise DuplicatePlace()
         new_id = next(self._ids)
-        self.places[new_id] = {"id": new_id, "parent_id": data.get("parent_id"), "name": data["name"],
+        self.places[new_id] = {"id": new_id, "village": village, "parent_id": data.get("parent_id"), "name": data["name"],
                                "kind": data.get("kind"), "is_display": int(bool(data.get("is_display"))),
                                "notes": data.get("notes")}
         return new_id
@@ -457,7 +473,7 @@ class FakeRepository:
                 return "Pieces or extras are stored here. Move them before making this a display spot."
             if not to_display and any(i.get("display_place_id") == place_id for i in self.items.values()):
                 return "Pieces have this as their display spot. Change theirs before making it a storage place."
-        if self._name_taken(data.get("parent_id"), data["name"], except_id=place_id):
+        if self._name_taken(self.places[place_id]["village"], data.get("parent_id"), data["name"], except_id=place_id):
             raise DuplicatePlace()
         self.places[place_id].update({k: data.get(k) for k in ("parent_id", "name", "kind", "notes")},
                                      is_display=int(bool(data.get("is_display"))))
@@ -508,18 +524,22 @@ class FakeRepository:
                 "links": [{"building_id": b, "item_id": i} for b, i in sorted(self.links)],
                 "photos": photos, "scans": scans, "catalog_photos": catalog_photos}
 
-    def collection_summary(self) -> dict[str, Any]:
+    def collection_summary(self, village: str | None = None) -> dict[str, Any]:
+        items = [i for i in self.items.values() if village is None or i["village"] == village]
+        ids = {i["id"] for i in items}
         return {
             "by_category": [],
             "by_condition": [],
-            "totals": {"item_count": len(self.items), "total_paid": 0, "total_value": 0,
-                       "on_display": 0, "with_box": 0, "extras_count": len(self.extras)},
+            "totals": {"item_count": len(items), "total_paid": 0, "total_value": 0,
+                       "on_display": 0, "with_box": 0,
+                       "extras_count": sum(1 for e in self.extras.values() if e["item_id"] in ids)},
         }
 
 
 def add_place(repo: FakeRepository, name: str, parent: int | None = None, kind: str | None = None,
-              display: bool = False) -> int:
-    place_id = repo.create_place({"parent_id": parent, "name": name, "kind": kind, "is_display": display})
+              display: bool = False, village: str = "dickens") -> int:
+    place_id = repo.create_place({"parent_id": parent, "name": name, "kind": kind, "is_display": display,
+                                  "village": village})
     assert place_id is not None
     return place_id
 

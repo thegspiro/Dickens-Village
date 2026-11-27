@@ -1,9 +1,10 @@
 # Dickens-Village
 
-A self-hosted tracker for a Department 56 Dickens' Village collection: buildings, figures and accessories, where each piece is stored, its condition, the extras that go with it, and what it's worth.
+A self-hosted tracker for a Department 56 Dickens' Village collection: buildings, figures and accessories, where each piece is stored, its condition, the extras that go with it, and what it's worth. It also keeps a Holy Land Village collection, separately.
 
 ## Features
 
+- **Villages:** Dickens' Village and the Holy Land Village are kept apart. The switch at the top of every page picks the village. The collection list, Storage, Catalog and Summary then show only that village. New pieces go in the chosen village, and a piece's form can move it to the other one. Each village has its own storage places and display spots, so both can have a "Tub 1". The lookup offers the village's own lists plus the General Village Accessories. Links between buildings and figures stay within a village. Exports cover both villages, with a village column. Everything entered before villages existed is in Dickens' Village.
 - **Pieces** in three categories: Building, Figure / Person, Accessory / Decoration. Each piece records its item number, series, year introduced and year retired.
 - **Storage places:** places can sit inside each other as deep as you need, for example Garage › Cabinet 2 › Drawer 3 › Spot B. Each place has a name and an optional type, shown before a short name ("Drawer" + "3" reads "Drawer 3"). Mark a place as a **display spot** (a table, shelf or mantel) to record where a piece goes when it's put out. Each piece has a place it's stored in and a display spot. Each extra (a light cord, say) can have its own place, or stay with its piece. The **Storage** page shows the whole tree with counts. Each place has its own page listing what belongs in it, what's inside the places within it, and which of those pieces are out on display. The collection list can filter by place, including the places inside it.
 - **Current condition:** a grade (Mint → Damaged), condition notes, the date you last checked, and whether you have the original box and sleeve.
@@ -19,7 +20,7 @@ A self-hosted tracker for a Department 56 Dickens' Village collection: buildings
 
 ## Reference catalog
 
-`data/catalog/dickens_village_2025.csv` holds Department 56's 2025 Dickens' Village checklists: 399 lighted pieces and 361 accessories, including the individual pieces of sets. `data/catalog/general_village_accessories_2021.csv` holds the 2021 General Village Accessories checklist (1,189 entries: snow, lamps, trees, fences, lights and the like). Browse them from the **Catalog** tab, where each entry has its own page with your reference photos, the pieces you own that are linked to it, and an "Add to my collection" button. It loads into the database on every start (`python -m app.catalog sync`). Loading is an upsert, so it is safe to repeat, and corrections to the CSV take effect on the next restart. An entry removed from the CSV is not deleted, because pieces and photos may belong to it: it disappears from the lookup and search, and its page says it's no longer in the reference lists. If it comes back in a later CSV, it is listed again. Lighted pieces fill in as Building and accessories as Accessory; change the category on the form when a piece is a figure.
+`data/catalog/dickens_village_2025.csv` holds Department 56's 2025 Dickens' Village checklists: 399 lighted pieces and 361 accessories, including the individual pieces of sets. `data/catalog/general_village_accessories_2021.csv` holds the 2021 General Village Accessories checklist (1,189 entries: snow, lamps, trees, fences, lights and the like). `data/catalog/holy_land.csv` holds the Holy Land collection checklists: 17 lighted pieces (series Little Town Of Bethlehem, The Easter Story and Parables Of Jesus) and 27 resin accessories. Each list belongs to a village (`LIST_VILLAGES` in `app/catalog.py`); the General Village Accessories belong to both. Browse them from the **Catalog** tab, where each entry has its own page with your reference photos, the pieces you own that are linked to it, and an "Add to my collection" button. It loads into the database on every start (`python -m app.catalog sync`). Loading is an upsert, so it is safe to repeat, and corrections to the CSV take effect on the next restart. An entry removed from the CSV is not deleted, because pieces and photos may belong to it: it disappears from the lookup and search, and its page says it's no longer in the reference lists. If it comes back in a later CSV, it is listed again. Lighted pieces fill in as Building and accessories as Accessory; change the category on the form when a piece is a figure.
 
 Problems in the source PDFs, such as a retirement year printed as 2917 or one item number used for two pieces, are listed in each list's `*_source_issues.txt` file next to its CSV. The impossible years were left blank rather than guessed. Spelling is kept as printed. The General Village Accessories PDF lists about 40 pieces twice with the same years and prices; each is listed once, and the issues file names them. `scripts/catalog/` has the scripts that built the CSV from the PDFs.
 
@@ -67,8 +68,8 @@ The pages adapt to small screens: the menu collapses, lists become cards, and ph
 
 The **Phone app** (menu → *Phone app*, or `/app`) keeps a copy of your collection and the catalog on the phone. If the server can't be reached, any page you open goes to the phone app instead. Offline you can:
 
-- browse and search your pieces;
-- add pieces, including filling them in from the catalog, and pick their storage place and display spot (new places are added on the full site);
+- browse and search your pieces, in the village chosen at the top of the list (the phone remembers its own choice);
+- add pieces (to that village), including filling them in from the catalog, and pick their storage place and display spot (new places are added on the full site);
 - edit pieces and extras, and add extras;
 - take or attach photos (they're shrunk to 2000 pixels on the long side, the size the server keeps, so they take less space on the phone and upload faster). A photo the server refused can be tried again from **Needs attention**.
 
