@@ -1,4 +1,14 @@
-"""Turn column-classified PDF lines into catalog records (sets + pieces)."""
+"""Turn column-classified PDF lines into catalog records (sets + pieces).
+
+usage:
+    build_records.py LIGHTED_LINES.json ACCESSORIES_LINES.json OUT.json
+    build_records.py --out OUT.json SOURCE=LINES.json [SOURCE=LINES.json ...]
+
+The first form is the one used for the 2025 Dickens' Village lists (sources
+"lighted" and "accessories"). The second names each input's source, which
+normalize.py's profile maps to a catalog list. Section headings written by
+dump_lines.py --section are stored on each record as "section".
+"""
 import json
 import re
 import sys
@@ -18,8 +28,15 @@ def build(lines, source):
     records = []
     pending_prefix = []
     cur = None
+    section = None
     for i, r in enumerate(lines):
-        nxt = lines[i + 1] if i + 1 < len(lines) else None
+        if 'section' in r:
+            # A new heading: nothing before it continues past it.
+            section = r['section']
+            pending_prefix = []
+            cur = None
+            continue
+        nxt = next((n for n in lines[i + 1:] if 'section' not in n), None)
         if is_start(r):
             desc = ' '.join([*pending_prefix, r['desc']]).strip()
             pending_prefix = []
@@ -28,6 +45,8 @@ def build(lines, source):
                 'issued': r['issued'], 'retired': r['retired'], 'us': r['us'], 'cad': r['cad'],
                 'pieces': [], 'flags': [], 'page': r['page'],
             }
+            if section is not None:
+                cur['section'] = section
             if not priced(r):
                 cur['flags'].append('start line without price')
             records.append(cur)
@@ -57,6 +76,8 @@ def build(lines, source):
                     'issued': r['issued'], 'retired': r['retired'], 'us': r['us'], 'cad': r['cad'],
                     'pieces': [], 'flags': ['no item number in source'], 'page': r['page'],
                 }
+                if section is not None:
+                    cur['section'] = section
                 records.append(cur)
             continue
         # unpriced continuation line
@@ -76,10 +97,26 @@ def build(lines, source):
     return records
 
 
-if __name__ == '__main__':
-    # usage: build_records.py LIGHTED_LINES.json ACCESSORIES_LINES.json OUT.json
+def main(argv):
+    if argv and argv[0] == '--out':
+        dest, inputs = argv[1], []
+        for spec in argv[2:]:
+            source, _, path = spec.partition('=')
+            if not source or not path:
+                raise SystemExit(f'expected SOURCE=LINES.json, got {spec!r}')
+            inputs.append((path, source))
+    elif len(argv) == 3:
+        dest, inputs = argv[2], [(argv[0], 'lighted'), (argv[1], 'accessories')]
+    else:
+        raise SystemExit(__doc__)
     out = []
-    for path, source in ((sys.argv[1], 'lighted'), (sys.argv[2], 'accessories')):
-        out.extend(build(json.load(open(path)), source))
-    json.dump(out, open(sys.argv[3], 'w'), indent=1)
+    for path, source in inputs:
+        with open(path) as fh:
+            out.extend(build(json.load(fh), source))
+    with open(dest, 'w') as fh:
+        json.dump(out, fh, indent=1)
     print(len(out), 'records', sum(len(r['pieces']) for r in out), 'pieces')
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

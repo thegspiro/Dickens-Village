@@ -563,7 +563,7 @@ async function editView(key) {
           lookupResults.hidden = true;
         } }, h("span", { class: "combo-title" }, h("span", { class: "combo-number" }, e.item_number || "No number"), " · ",
           h("strong", null, e.name), " · " + (e.year_issued || "?") + "–" + (e.is_current ? "Current" : e.year_retired || "?")),
-          h("span", { class: "combo-detail" }, (e.list === "accessories" ? "Accessories list" : "Lighted list") +
+          h("span", { class: "combo-detail" }, (e.list_label || (e.list === "accessories" ? "Accessories" : "Lighted")) + " list" +
             (e.parent_name ? " · part of “" + e.parent_name + "”" : ""))));
       });
       lookupResults.hidden = !hits.length;

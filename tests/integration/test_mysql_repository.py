@@ -301,11 +301,11 @@ def test_catalog_sync_is_idempotent_and_updates(db_config, repo):
     rows = catalog.load_directory(CATALOG_DIR)
     conn = connect(db_config)
     try:
-        assert catalog.sync(conn, rows) == 760
-        assert catalog.sync(conn, rows) == 760
+        assert catalog.sync(conn, rows) == len(rows) == 1949
+        assert catalog.sync(conn, rows) == 1949
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS n FROM catalog_items")
-            assert cur.fetchone()["n"] == 760
+            assert cur.fetchone()["n"] == 1949
         changed = [catalog.CatalogRow({**r.values, "name": "Renamed"}) if r.values["source_key"] == "lighted-2025-0002"
                    else r for r in rows]
         catalog.sync(conn, changed)
@@ -512,7 +512,7 @@ def test_catalog_all_and_etag(db_config, repo):
     finally:
         conn.close()
     rows = repo.catalog_all()
-    assert len(rows) == 760 and "photo_id" in rows[0]
+    assert len(rows) == 1949 and "photo_id" in rows[0]
     tag = repo.catalog_etag()
     repo.add_catalog_photo(rows[0]["id"], "f" * 32 + ".jpg", None)
     assert repo.catalog_etag() != tag

@@ -19,7 +19,7 @@ It is kept because pieces or photos may belong to it.</p>
     <dl class="details">
       <dt>Item number</dt><dd>{{ entry.item_number or '—' }}</dd>
       {% if entry.parent_name %}<dt>Part of</dt><dd>{{ entry.parent_name }}{% if entry.parent_item_number %} <span class="muted">({{ entry.parent_item_number }})</span>{% endif %}</dd>{% endif %}
-      <dt>List</dt><dd>{{ 'Lighted items' if entry.list_name == 'lighted' else 'Accessories' }}</dd>
+      <dt>List</dt><dd>{{ 'Lighted items' if entry.list_name == 'lighted' else entry.list_name|catalog_list }}</dd>
       <dt>Issued / retired</dt><dd>{{ entry.year_issued or '?' }} – {{ 'Current' if entry.is_current else (entry.year_retired or '?') }}</dd>
       {% if entry.series %}<dt>Series</dt><dd>{{ entry.series }}</dd>{% endif %}
       {% if entry.details and entry.details != 'Part of "' ~ entry.parent_name ~ '"' %}<dt>Notes</dt><dd>{{ entry.details }}</dd>{% endif %}

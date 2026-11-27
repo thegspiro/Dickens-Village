@@ -1,0 +1,57 @@
+56.53193 Lighted Christmas Bare Branch Tree: US price $2.00 and Canadian price $24.00 do not fit together; one may be misprinted (kept as printed)
+4030905 Yosemite Spruce Tree: source text starts with two quote marks
+4038818 Glitzy Holiday Trees: source text starts with two quote marks
+4038841 Tudor Gardens Corner Hedge: source text has the closing quote after "set of 4" and a stray backtick
+4047588 Tudor Gardens Trees: US price is printed as "22..50" in the description column; US price left blank
+6005517 Peppermint Pups: issue year 2020 is printed in the description column with a stray backtick
+6005501 Lit Deer Yard Décor: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005507 Ready To Decorate: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005510 Gingerbread Trees: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005509 Gingerbread Bench: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005504 A Surprise For Santa: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005506 Christmas Sidewalk Concert: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005502 Village Patriotic Flags: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005525 Classic Christmas Sign: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005524 Classic Christmas Poinsettia Cart: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005500 Christmas Sled: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005520 Peppermint White Sisals: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005517 Peppermint Pups: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005519 Peppermint Snowman: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005440 Lit Ice Castle Throne: listed again on page 26 with the same years and prices; kept the entry from page 25
+6005513 Lit Ice Castle Sign: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005559 Bobbing For Apples: listed again on page 27 with the same years and prices; kept the entry from page 26
+6006812 Village Baskets of Corn: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005544 Two Turtle Doves Tree: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005543 One Partridge in a Pear Tree: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005551 Lit Emerald Trees: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005549 Holiday Town Tree: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005545 Lit Holiday Pines: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005546 Ruby Christmas Pines: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005547 Enchanted Pines: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005542 Snowy Spirals: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005538 Village Mountain Plateau: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005531 Candlestick Street Lights: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005534 Village Cardinal Street Lights: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005532 Reindeer Street Lights: listed again on page 27 with the same years and prices; kept the entry from page 26
+6005533 Vintage Santa Street Lights: listed again on page 27 with the same years and prices; kept the entry from page 26
+Item number 4024046 is used by 2 entries: Mini Sisals; Mini Sisals
+Item number 4025369 is used by 2 entries: Peppermint Lit Bare Branch Tree; Springtime Promo Trees
+Item number 4047587 is used by 2 entries: Village Mountain Peak; Woodland Beaver Pond
+Item number 4057571 is used by 2 entries: Winter Flurries; Winter Flurries, Animated
+Item number 56.53121 is used by 2 entries: Replacement 3 Volt Light Bulbs; Scarecrow & His Feathered Friends
+Item number 56.53123 is used by 3 entries: String Of 12 Santa Lights; Village Twinkling Blanket Of Snow; Village Santa's Sleigh Sign
+Item number 6001687 is used by 2 entries: Unwinding From the Holiday, animated; Unwinding From The Holiday
+Item number 6001718 is used by 2 entries: Candy Corner Topiaries; Candy Corner Topiaries
+Item number 6005495 is used by 2 entries: Building A Snowman; Building A Snowman
+Item number 6005503 is used by 2 entries: Villafe Patriotic Bunting; Village Patriotic Bunting
+Item number 6005512 is used by 2 entries: Lit Ice Castle Tree; Lit Ice Castle Tree
+Item number 6005518 is used by 2 entries: Peppermint Pendants; Peppermint Pennants
+Item number 6005523 is used by 2 entries: Classic Chriswtmas Sleigh; Classic Christmas Sleigh
+Item number 6005529 is used by 2 entries: Lit Ice Sastle Steps; Lit Ice Castle Steps
+Item number 6005536 is used by 2 entries: London City Silhouette; London City Silhouette
+Item number 6005539 is used by 2 entries: Lit Northern Peaks; Lit Northern Peaks
+Item number 6005541 is used by 2 entries: Blue Christnas Tinsels; Blue Christmas Tinsels
+Item number 6007679 is used by 2 entries: Farming Chores; Harvest Pumpkin Stand
+Item number 6007680 is used by 2 entries: Happy Scarscrow; Harvest Farms Kid
+Item number 6007681 is used by 2 entries: Autumn Gourds; Harvest Pumpkin Milk Cans
+Item number 801130 is used by 2 entries: New Animated Skating Pond; New Animated Skating Pond

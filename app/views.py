@@ -27,6 +27,7 @@ from flask import (
 )
 
 from . import catalog_match, export, photos, scans
+from .catalog import list_label
 from .places import KIND_SUGGESTIONS, MAX_DEPTH, PlaceTree
 from .auth import (
     check_csrf,
@@ -225,6 +226,7 @@ def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
         "list": row["list_name"],
+        "list_label": list_label(row["list_name"]),
         "item_number": row["item_number"],
         "name": row["name"],
         "details": row["details"],

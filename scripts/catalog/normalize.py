@@ -1,11 +1,17 @@
-"""Normalize parsed records into the catalog CSV + an anomalies report."""
+"""Normalize parsed records into the catalog CSV + an anomalies report.
+
+usage: normalize.py RECORDS.json OUT.csv ISSUES.txt [--profile NAME]
+
+A profile says which catalog list each record source becomes, the source_key
+prefix and default category for it, the corrections for lines the parser
+cannot read, and which extra checks to run. The default profile,
+dickens-2025, reproduces data/catalog/dickens_village_2025.csv exactly.
+"""
 import csv
 import json
 import re
 import sys
 from collections import Counter
-
-LIST_TAG = '2025'
 
 # Corrections for lines the generic parser cannot read correctly. Keyed by
 # (source, item_number, title prefix). Each sets fields on the parsed record.
@@ -25,6 +31,32 @@ OVERRIDES = {
 # Records the parser creates from orphaned lines that belong elsewhere (folded into an override above).
 DROP = {('accessories', None, 'set of 4')}
 
+# General Village Accessories (2021). Only lines whose name the parser would get
+# wrong are corrected; spelling in the source is kept as printed.
+GENERAL_2021_OVERRIDES = {
+    ('general', '4030905', '""Yosemite'): {
+        'title': '"Yosemite Spruce Tree", set of 2',
+        'report': 'source text starts with two quote marks',
+    },
+    ('general', '4038818', '""Glitzy'): {
+        'title': '"Glitzy Holiday Trees", set of 2',
+        'report': 'source text starts with two quote marks',
+    },
+    ('general', '4038841', '"Tudor Gardens Corner Hedge'): {
+        'title': '"Tudor Gardens Corner Hedge", set of 4',
+        'report': 'source text has the closing quote after "set of 4" and a stray backtick',
+    },
+    ('general', '4047588', 'Tudor Gardens Trees'): {
+        'title': 'Tudor Gardens Trees',
+        'report': 'US price is printed as "22..50" in the description column; US price left blank',
+    },
+    ('general', '6005517', 'Peppermint Pups 2020'): {
+        'title': 'Peppermint Pups',
+        'issued': '2020',
+        'report': 'issue year 2020 is printed in the description column with a stray backtick',
+    },
+}
+
 SERIES_PATTERNS = [
     (re.compile(r'christmas carol|\(CC\)', re.I), 'A Christmas Carol'),
     (re.compile(r'12th night|twelfth night', re.I), '12th Night'),
@@ -42,6 +74,24 @@ UNQUOTED_SPLIT = re.compile(
     r'\s*(?:,\s*(?:boxed set|set of|numbered|limited|\d+(?:st|nd|rd|th) anniversary|set\b)|\(|\.\s+limited|\s+NA$)',
     re.I,
 )
+
+
+# source -> (catalog list name, source_key prefix, default category)
+PROFILES = {
+    'dickens-2025': {
+        'sources': {
+            'lighted': ('lighted', 'lighted-2025', 'building'),
+            'accessories': ('accessories', 'accessories-2025', 'accessory'),
+        },
+        'overrides': OVERRIDES, 'drop': DROP, 'sections': None,
+        'years': (1980, 2026), 'checks': False,
+    },
+    'general-2021': {
+        'sources': {'general': ('general-accessories', 'general-2021', 'accessory')},
+        'overrides': GENERAL_2021_OVERRIDES, 'drop': set(), 'sections': None,
+        'years': (1975, 2021), 'checks': True,
+    },
+}
 
 
 def money(raw):
@@ -84,48 +134,77 @@ def series_for(name, details):
     return ''
 
 
-def year(raw, problems, label):
+def year(raw, problems, label, years=(1980, 2026)):
     if raw in (None, '', 'Current'):
         return ''
     y = int(raw)
-    if not 1980 <= y <= 2026:
+    if not years[0] <= y <= years[1]:
         problems.append(f'{label}: year {raw} in the source is impossible; left blank')
         return ''
     return str(y)
 
 
-def main(records_path, csv_path, report_path):
+def _same_listing(a, b):
+    keys = ('item_number', 'issued', 'retired', 'us', 'cad')
+    return all(a[k] == b[k] for k in keys) and split_name(a['title'])[0].lower() == split_name(b['title'])[0].lower() \
+        and not a['pieces'] and not b['pieces']
+
+
+def main(records_path, csv_path, report_path, profile_name='dickens-2025'):
+    profile = PROFILES[profile_name]
+    years = profile['years']
     records = json.load(open(records_path))
     rows, problems = [], []
     seq = Counter()
+    kept = []
     for rec in records:
-        for ok, change in OVERRIDES.items():
+        source_text = re.sub(r'\s+', ' ', ' '.join([rec['title'], *rec['notes']])).strip()
+        for ok, change in profile['overrides'].items():
             if ok[0] == rec['source'] and ok[1] == rec['item_number'] and rec['title'].startswith(ok[2]):
+                change = dict(change)
+                report = change.pop('report', None)
                 rec.update(change)
-        if (rec['source'], rec['item_number'], rec['title']) in DROP:
+                if report:
+                    rec['source_text'] = source_text
+                    problems.append(f"{rec['item_number']} {split_name(rec['title'])[0]}: {report}")
+        if (rec['source'], rec['item_number'], rec['title']) in profile['drop']:
             continue
+        if profile['checks']:
+            twin = next((k for k in kept if _same_listing(k, rec)), None)
+            if twin is not None:
+                problems.append(f"{rec['item_number']} {split_name(rec['title'])[0]}: listed again on page "
+                                f"{rec['page']} with the same years and prices; kept the entry from page {twin['page']}")
+                continue
+            kept.append(rec)
         seq[rec['source']] += 1
-        list_name = 'lighted' if rec['source'] == 'lighted' else 'accessories'
-        skey = f"{list_name}-{LIST_TAG}-{seq[rec['source']]:04d}"
+        list_name, key_prefix, category = profile['sources'][rec['source']]
+        skey = f"{key_prefix}-{seq[rec['source']]:04d}"
         name, rest = split_name(rec['title'])
         if name.endswith(' NA'):
             name = name[:-3]
         details = clean_details([rest, *rec['notes']])
         label = f"{rec['item_number'] or '(no number)'} {name}"
-        issued = year(rec['issued'], problems, label)
-        retired = year(rec['retired'], problems, label)
+        issued = year(rec['issued'], problems, label, years)
+        retired = year(rec['retired'], problems, label, years)
         if not issued:
             problems.append(f'{label}: no issue year in source')
         if not rec['item_number']:
             problems.append(f'{label}: listed without an item number')
-        category = 'building' if list_name == 'lighted' else 'accessory'
+        if profile['checks']:
+            us, cad = money(rec['us']), money(rec['cad'])
+            if us and cad and float(us) > 0 and not 0.8 <= float(cad) / float(us) <= 3:
+                problems.append(f'{label}: US price ${us} and Canadian price ${cad} do not fit together; '
+                                'one may be misprinted (kept as printed)')
+        series = series_for(name, details)
+        if profile['sections'] and rec.get('section'):
+            series = profile['sections'][rec['section']]
         row = {
             'source_key': skey,
             'list': list_name,
             'item_number': rec['item_number'] or '',
             'name': name,
             'details': details,
-            'series': series_for(name, details),
+            'series': series,
             'year_issued': issued,
             'year_retired': retired,
             'is_current': '1' if rec['retired'] == 'Current' else '0',
@@ -134,7 +213,7 @@ def main(records_path, csv_path, report_path):
             'default_category': category,
             'parent_key': '',
             'source_page': rec['page'],
-            'source_text': re.sub(r'\s+', ' ', ' '.join([rec['title'], *rec['notes']])).strip(),
+            'source_text': rec.get('source_text') or re.sub(r'\s+', ' ', ' '.join([rec['title'], *rec['notes']])).strip(),
         }
         rows.append(row)
         for n, piece in enumerate(rec['pieces'], 1):
@@ -147,8 +226,8 @@ def main(records_path, csv_path, report_path):
                 'name': pname,
                 'details': clean_details([f'Part of "{name}"', prest, *piece['notes']]),
                 'series': row['series'],
-                'year_issued': year(piece['issued'] or rec['issued'], problems, plabel),
-                'year_retired': year(piece['retired'], problems, plabel),
+                'year_issued': year(piece['issued'] or rec['issued'], problems, plabel, years),
+                'year_retired': year(piece['retired'], problems, plabel, years),
                 'is_current': '1' if piece['retired'] == 'Current' else '0',
                 'srp_usd': money(piece['us']),
                 'srp_cad': money(piece['cad']),
@@ -181,4 +260,12 @@ def main(records_path, csv_path, report_path):
 
 
 if __name__ == '__main__':
-    main(*sys.argv[1:4])
+    args = sys.argv[1:]
+    profile = 'dickens-2025'
+    if '--profile' in args:
+        at = args.index('--profile')
+        profile = args[at + 1]
+        del args[at:at + 2]
+    if len(args) != 3 or profile not in PROFILES:
+        raise SystemExit(__doc__ + '\nprofiles: ' + ', '.join(PROFILES))
+    main(*args, profile_name=profile)

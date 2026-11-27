@@ -36,7 +36,7 @@
         <td class="primary"><a href="{{ url_for('main.catalog_entry', catalog_id=r.id) }}">{{ r.name }}</a>{% if r.parent_name %} <span class="muted">(part of “{{ r.parent_name }}”)</span>{% endif %}
           {% if r.owned_count %}<span class="badge">You own {{ r.owned_count }}</span>{% endif %}</td>
         <td data-label="Item #">{{ r.item_number or '—' }}</td>
-        <td data-label="List">{{ 'Lighted' if r.list_name == 'lighted' else 'Accessories' }}</td>
+        <td data-label="List">{{ r.list_name|catalog_list }}</td>
         <td data-label="Years">{{ r.year_issued or '?' }}–{{ 'Current' if r.is_current else (r.year_retired or '?') }}</td>
         <td data-label="Original retail" class="num">{{ r.srp_usd | money or '—' }}</td>
       </tr>
