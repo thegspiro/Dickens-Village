@@ -4,6 +4,7 @@
 {% block content %}
 <section class="card narrow">
   <h1>{{ 'Edit “' ~ (place | place_label) ~ '”' if place else 'Add a place' }}</h1>
+  <p class="muted">{{ village_name(village) }}</p>
   {% if errors %}<p class="flash flash-error" role="alert">Please fix the highlighted fields.</p>{% endif %}
   <form method="post" action="{{ url_for('main.place_edit', place_id=place.id) if place else url_for('main.place_new') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

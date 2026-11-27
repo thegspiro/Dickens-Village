@@ -71,6 +71,7 @@ def extra_to_json(row: Mapping[str, Any]) -> dict[str, Any]:
 def place_to_json(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
+        "village": row.get("village") or "dickens",
         "parent_id": row.get("parent_id"),
         "name": row["name"],
         "kind": row.get("kind"),

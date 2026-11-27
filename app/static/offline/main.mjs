@@ -31,14 +31,22 @@ var LABELS = {
   box_height_in: "Box height", box_width_in: "Box width", box_depth_in: "Box depth",
   purchase_date: "Purchase date", price_paid: "Price paid ($)", purchased_from: "Bought from",
   estimated_value: "Estimated value ($)", notes: "Notes", catalog_id: "Catalog link",
-  description: "Description", quantity: "Quantity",
+  description: "Description", quantity: "Quantity", village: "Village",
 };
 var NUMBER_FIELDS = ["year_introduced", "year_retired", "quantity", "catalog_id", "storage_place_id",
   "display_place_id"];
 var places = m.placeTree([]);
+var village = m.DEFAULT_VILLAGE; // the village the list and new pieces are in, kept on this phone
 
 async function loadPlaces() {
   places = m.placeTree(await db.getMeta("places", []));
+  var saved = await db.getMeta("village", m.DEFAULT_VILLAGE);
+  village = villageNames()[saved] ? saved : m.DEFAULT_VILLAGE;
+}
+
+/* The server's village names (an older server sends none). */
+function villageNames() {
+  return choices.villages || m.VILLAGES;
 }
 var BOOL_FIELDS = ["has_original_box", "has_sleeve", "on_display"];
 
@@ -109,6 +117,7 @@ function displayValue(field, v) {
   if (BOOL_FIELDS.indexOf(field) !== -1) return v ? "Yes" : "No";
   if (field === "category") return choices.categories[v] || v;
   if (field === "condition_grade") return choices.conditions[v] || v;
+  if (field === "village") return villageNames()[v] || v;
   if (field === "storage_place_id" || field === "display_place_id") return places.pathText(v) || "(a place not on this phone)";
   return String(v);
 }
@@ -182,6 +191,7 @@ async function listView(params) {
   });
   var q = (params.get("q") || "").toLowerCase();
   var cat = params.get("category") || "";
+  items = items.filter(function (r) { return m.villageOf(r.local) === village; });
   var shown = items.filter(function (r) {
     var v = r.local;
     if (cat && v.category !== cat) return false;
@@ -205,10 +215,17 @@ async function listView(params) {
   }
   search.addEventListener("change", apply);
   catSel.addEventListener("change", apply);
+  var names = villageNames();
+  var villageSel = h("select", { "aria-label": "Village", class: "village-select", onchange: async function () {
+    await db.setMeta("village", villageSel.value);
+    location.hash = "#/";
+    route();
+  } }, Object.keys(names).map(function (k) { return h("option", { value: k, selected: k === village }, names[k]); }));
 
   return [
     h("div", { class: "title-row" }, h("h1", null, "My collection ", h("span", { class: "muted" }, "(" + items.length + ")")),
       h("a", { class: "button", href: "#/new" }, "Add piece")),
+    h("div", { class: "card offline-filters" }, villageSel),
     h("div", { class: "card offline-filters" }, search, catSel),
     !items.length && !lastSync ? h("p", { class: "card" },
       "Nothing is stored on this phone yet. Open the app once while you're online so it can copy your collection.") : null,
@@ -283,6 +300,7 @@ async function pieceView(key) {
   var catalog = v.catalog_id ? await db.get("catalog", Number(v.catalog_id)) : null;
 
   var rows = [
+    ["Village", villageNames()[m.villageOf(v)] || m.villageOf(v)],
     ["Item number", v.item_number || "—"],
     catalog ? ["Catalog listing", (catalog.item_number || "No number") + " · " + catalog.name +
       (catalog.srp_usd ? " · original retail $" + catalog.srp_usd : "")] : null,
@@ -477,7 +495,8 @@ function field(spec, values, errors) {
     return h("label", { class: "check" }, h("input", { type: "checkbox", id: id, name: name, checked: Boolean(v) }), " ", LABELS[name]);
   }
   if (kind === "select-place" || kind === "select-display" || kind === "select-extra-place") {
-    var opts = places.options(kind === "select-display");
+    // Only the places of the piece's village (an extra's values carry its piece's village).
+    var opts = places.options(kind === "select-display", m.villageOf(values));
     var known = v == null || opts.some(function (o) { return o.id === Number(v); });
     input = h("select", { id: id, name: name },
       h("option", { value: "" }, kind === "select-display" ? "None" : kind === "select-extra-place" ? "With the piece" : "Not assigned"),
@@ -531,7 +550,8 @@ function validate(values, fields) {
 async function editView(key) {
   var rec = key ? await db.get("items", key) : null;
   if (key && !rec) return notFound();
-  var values = rec ? Object.assign({}, rec.local) : { catalog_id: null };
+  var values = rec ? Object.assign({}, rec.local) : { catalog_id: null, village: village };
+  var pieceVillage = m.villageOf(values);
   var catalog = await db.all("catalog");
   var form = h("form", { class: "card", novalidate: true });
   var lookupResults = h("ul", { class: "combo-results", role: "listbox", hidden: true });
@@ -548,7 +568,7 @@ async function editView(key) {
 
   var lookup = h("input", { type: "search", placeholder: "Item number, e.g. 56.65005 or 65005", "aria-label": "Look up in catalog",
     autocomplete: "off", oninput: function () {
-      var hits = m.searchCatalog(catalog, lookup.value, 15);
+      var hits = m.searchCatalog(catalog, lookup.value, 15, pieceVillage);
       while (lookupResults.firstChild) lookupResults.removeChild(lookupResults.firstChild);
       hits.forEach(function (e) {
         lookupResults.appendChild(h("li", { role: "option", onclick: function () {
@@ -573,6 +593,8 @@ async function editView(key) {
   function build(errors) {
     while (form.firstChild) form.removeChild(form.firstChild);
     append(form, [
+      h("p", { class: "muted" }, villageNames()[pieceVillage] || pieceVillage,
+        rec ? " · Move a piece to another village on the full site." : null),
       catalog.length ? h("section", { class: "catalog-lookup" }, h("label", null, "Look up in catalog"),
         h("div", { class: "combo" }, lookup, lookupResults)) : null,
       linked,
@@ -587,9 +609,10 @@ async function editView(key) {
   build({});
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
-    var fields = m.ITEM_FIELDS.filter(function (f) { return f !== "catalog_id"; });
+    var fields = m.ITEM_FIELDS.filter(function (f) { return f !== "catalog_id" && f !== "village"; });
     var input = readForm(form, fields);
     input.catalog_id = values.catalog_id == null ? null : Number(values.catalog_id);
+    if (!rec) input.village = pieceVillage; // an edit leaves the village alone
     var errors = validate(input, fields);
     if (Object.keys(errors).length) {
       Object.assign(values, input);
@@ -624,6 +647,7 @@ async function extraView(itemKey, extraKey) {
   var rec = extraKey === "new" ? null : await db.get("extras", extraKey);
   if (extraKey !== "new" && !rec) return notFound();
   var values = rec ? Object.assign({}, rec.local) : { quantity: 1 };
+  values.village = m.villageOf(item.local); // for the place picker only; not an extra field
   var form = h("form", { class: "card", novalidate: true });
   function build(errors) {
     while (form.firstChild) form.removeChild(form.firstChild);

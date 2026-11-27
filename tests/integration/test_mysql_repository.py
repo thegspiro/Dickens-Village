@@ -104,6 +104,13 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0010_villages"
+        with conn.cursor() as cur:
+            for table in ("items", "storage_places", "catalog_items"):
+                cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'village'")
+                assert cur.fetchone() is None, table
+            cur.execute("SHOW INDEX FROM storage_places WHERE Key_name = 'uq_storage_places_parent_name'")
+            assert cur.fetchall()
         assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
         with conn.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'storage_places'")
@@ -147,7 +154,8 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
             assert cur.fetchone() is None
         assert migrate.migrate_up(conn, migrations) == [
             "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
-            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places"]
+            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places",
+            "0010_villages"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -301,11 +309,11 @@ def test_catalog_sync_is_idempotent_and_updates(db_config, repo):
     rows = catalog.load_directory(CATALOG_DIR)
     conn = connect(db_config)
     try:
-        assert catalog.sync(conn, rows) == len(rows) == 1949
-        assert catalog.sync(conn, rows) == 1949
+        assert catalog.sync(conn, rows) == len(rows) == 1993
+        assert catalog.sync(conn, rows) == 1993
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS n FROM catalog_items")
-            assert cur.fetchone()["n"] == 1949
+            assert cur.fetchone()["n"] == 1993
         changed = [catalog.CatalogRow({**r.values, "name": "Renamed"}) if r.values["source_key"] == "lighted-2025-0002"
                    else r for r in rows]
         catalog.sync(conn, changed)
@@ -512,7 +520,7 @@ def test_catalog_all_and_etag(db_config, repo):
     finally:
         conn.close()
     rows = repo.catalog_all()
-    assert len(rows) == 1949 and "photo_id" in rows[0]
+    assert len(rows) == 1993 and "photo_id" in rows[0]
     tag = repo.catalog_etag()
     repo.add_catalog_photo(rows[0]["id"], "f" * 32 + ".jpg", None)
     assert repo.catalog_etag() != tag
@@ -542,6 +550,7 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
     target = by_version["0007_photo_order_captions"]
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, list(by_version.values())) == "0010_villages"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0009_storage_places"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0008_catalog_listed"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0007_photo_order_captions"
@@ -556,7 +565,8 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
                             (item_id, f"{name:0<32}.jpg"))
         conn.commit()
         assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions",
-                                                                       "0008_catalog_listed", "0009_storage_places"]
+                                                                       "0008_catalog_listed", "0009_storage_places",
+                                                                       "0010_villages"]
 
         def order(item_id):
             with conn.cursor() as cur:
@@ -786,6 +796,7 @@ def test_storage_places_migration_turns_old_values_into_places(db_config, migrat
     by_version = {m.version: m for m in migrations}
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, migrations) == "0010_villages"
         assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
         ids = _legacy_items(conn, [
             ("full", "Attic", "3", "Top"),
@@ -797,7 +808,7 @@ def test_storage_places_migration_turns_old_values_into_places(db_config, migrat
             ("location only", "Basement", None, None),
             ("nowhere", None, None, None),
         ])
-        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places"]
+        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places", "0010_villages"]
         repo = MySQLRepository(conn)
         from app.places import PlaceTree
 
@@ -828,12 +839,13 @@ def test_storage_places_migration_turns_old_values_into_places(db_config, migrat
         assert repo.get_item(ids["full"])["storage_place_id"] == rows[ids["tray alone"]]["storage_place_id"]
 
         # Rolling back leaves Location / Tub / Tray as the app last kept them.
+        assert migrate.migrate_down(conn, migrations) == "0010_villages"
         assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
         with conn.cursor() as cur:
             cur.execute("SELECT storage_location, storage_tub, storage_tray FROM items WHERE id = %s", (ids["full"],))
             # the place's name; "Tray" is its type
             assert cur.fetchone() == {"storage_location": "Z", "storage_tub": None, "storage_tray": None}
-        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places"]
+        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places", "0010_villages"]
     finally:
         migrate.migrate_up(conn, migrations)  # back to the latest schema even if an assertion failed
         _truncate_all(conn)
@@ -955,3 +967,130 @@ def test_old_phone_values_find_or_create_places(repo):
     tree = PlaceTree(repo.list_places())
     assert tree.path_text(row["storage_place_id"]) == "Attic › Tub 4 › Tray Top"
     assert (row["storage_tub"], row["storage_tray"]) == ("4", "Top")
+
+
+# -- villages -----------------------------------------------------------------------
+
+
+def test_villages_migration_keeps_existing_rows_in_dickens_village(db_config, migrated):
+    migrations = migrate.discover(MIGRATIONS)
+    conn = connect(db_config)
+    try:
+        assert migrate.migrate_down(conn, migrations) == "0010_villages"
+        ids = _legacy_items(conn, [("before villages", "Attic", "3", None)])
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO storage_places (parent_id, name, kind) VALUES (NULL, 'Garage', NULL)")
+        conn.commit()
+        assert migrate.migrate_up(conn, migrations) == ["0010_villages"]
+        repo = MySQLRepository(conn)
+        assert repo.get_item(ids["before villages"])["village"] == "dickens"
+        assert {p["village"] for p in repo.list_places()} == {"dickens"}
+        # Both villages can now have a top-level Garage; one village still can't have two.
+        from app.repository import DuplicatePlace
+
+        assert _place_in(repo, "Garage", "holy-land")
+        with pytest.raises(DuplicatePlace):
+            _place_in(repo, "garage", "holy-land")
+        # ...which is what stops a rollback until one is renamed.
+        with pytest.raises(pymysql.err.IntegrityError):
+            migrate.migrate_down(conn, migrations)
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM storage_places LIKE 'village'")
+            assert cur.fetchone() is not None  # nothing was dropped
+            cur.execute("UPDATE storage_places SET name = 'Garage 2' WHERE village = 'holy-land'")
+        conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0010_villages"
+        assert migrate.migrate_up(conn, migrations) == ["0010_villages"]
+    finally:
+        migrate.migrate_up(conn, migrations)
+        _truncate_all(conn)
+        conn.close()
+
+
+def _place_in(repo, name, village, parent=None, display=False):
+    return repo.create_place({"village": village, "parent_id": parent, "name": name, "kind": None,
+                              "is_display": display, "notes": None})
+
+
+def test_pieces_places_and_summary_are_per_village(repo):
+    garage = _place(repo, "Garage")
+    holy_garage = _place_in(repo, "Garage", "holy-land")
+    holy_tub = _place_in(repo, "1", "dickens", parent=holy_garage)  # a child takes its parent's village
+    assert repo.get_place(holy_tub)["village"] == "holy-land"
+    from app.places import PlaceTree
+
+    tree = PlaceTree(repo.list_places())
+    assert tree.roots("holy-land") == [holy_garage] and tree.roots("dickens") == [garage]
+    assert "same village" in repo.update_place(holy_tub, {"parent_id": garage, "name": "1", "kind": None,
+                                                          "is_display": False, "notes": None})
+
+    church = repo.create_item({**item(name="Church", price_paid="10"), "storage_place_id": garage})
+    nativity = repo.create_item({**item(name="Nativity", village="holy-land", price_paid="55"),
+                                 "storage_place_id": holy_tub})
+    figure = repo.create_item(item(name="Carpenter & Son", category="figure", village="holy-land"))
+    repo.add_extra(nativity, parse_extra_form({"description": "Star", "quantity": "2"})[0])
+
+    def names(**args):
+        return sorted(r["name"] for r in repo.list_items({**filters(**args), "village": args.get("village")})[0])
+
+    assert names(village="holy-land") == ["Carpenter & Son", "Nativity"]
+    assert names(village="dickens") == ["Church"]
+    assert names() == ["Carpenter & Son", "Church", "Nativity"]
+    assert repo.count_unplaced("holy-land") == 1 and repo.count_unplaced("dickens") == 0
+    assert repo.count_unplaced() == 1
+
+    holy = repo.collection_summary("holy-land")["totals"]
+    assert (holy["item_count"], holy["total_paid"], holy["extras_count"]) == (2, Decimal("55.00"), 2)
+    dickens = repo.collection_summary("dickens")["totals"]
+    assert (dickens["item_count"], dickens["extras_count"]) == (1, 0)
+    assert repo.collection_summary()["totals"]["item_count"] == 3
+
+    # Links only within a village.
+    assert [r["id"] for r in repo.link_candidates(repo.get_item(nativity))] == [figure]
+    assert not repo.add_link(church, figure)
+    assert repo.add_link(nativity, figure)
+
+    # Old phone values make places in the piece's own village.
+    data = {**item(name="Old phone", village="holy-land"), "storage_location": "Garage", "storage_tub": "1",
+            "_legacy_storage": True}
+    old_id = repo.create_item(data)
+    assert repo.get_item(old_id)["storage_place_id"] == holy_tub
+
+    snap = repo.snapshot()
+    assert {p["id"]: p["village"] for p in snap["places"]}[holy_tub] == "holy-land"
+    assert {i["id"]: i["village"] for i in snap["items"]}[nativity] == "holy-land"
+    assert {p["id"]: p["village"] for p in repo.export_data()["places"]}[holy_garage] == "holy-land"
+
+
+def test_catalog_villages_and_filters(db_config, repo):
+    conn = connect(db_config)
+    try:
+        catalog.sync(conn, catalog.load_directory(CATALOG_DIR))
+    finally:
+        conn.close()
+    bethlehem = repo.search_catalog("56.59757")[0]
+    assert bethlehem["village"] == "holy-land" and bethlehem["list_name"] == "holy-land-lighted"
+    lamps = repo.search_catalog("56.59960")[0]
+    assert lamps["village"] is None
+    assert repo.search_catalog("56.65005")[0]["village"] == "dickens"
+
+    assert repo.search_catalog("56.59757", village="dickens") == []
+    assert repo.search_catalog("56.65005", village="holy-land") == []
+    assert repo.search_catalog("56.59960", village="holy-land")[0]["id"] == lamps["id"]
+    assert repo.search_catalog("56.59960", village="dickens")[0]["id"] == lamps["id"]
+
+    rows, total = repo.browse_catalog("bethlehem", village="holy-land")
+    assert bethlehem["id"] in {r["id"] for r in rows} and total >= 1
+    assert all(r["village"] in (None, "dickens") for r in repo.browse_catalog("bethlehem", village="dickens")[0])
+    _, everything = repo.browse_catalog(owned_only=False, missing_photos=True, limit=1)
+    _, holy_total = repo.browse_catalog(missing_photos=True, limit=1, village="holy-land")
+    _, dickens_total = repo.browse_catalog(missing_photos=True, limit=1, village="dickens")
+    assert holy_total == 44 + 1189 and dickens_total == 760 + 1189 and everything == 1993
+
+    # Owned counts and "only pieces I own" count the village's own pieces.
+    repo.create_item({**item(name="Lamps", village="holy-land"), "catalog_id": lamps["id"]})
+    repo.create_item({**item(name="Lamps too"), "catalog_id": lamps["id"]})
+    owned, owned_total = repo.browse_catalog(owned_only=True, village="holy-land")
+    assert owned_total == 1 and owned[0]["owned_count"] == 1
+    assert repo.browse_catalog(owned_only=True)[0][0]["owned_count"] == 2

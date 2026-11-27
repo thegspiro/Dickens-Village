@@ -29,6 +29,7 @@ from .sync import (
     place_to_json,
 )
 from .validation import (
+    DEFAULT_VILLAGE,
     ITEM_COLUMNS,
     PLACE_FIELDS,
     STORAGE_COLUMNS,
@@ -129,12 +130,12 @@ def _with_etag(payload: dict[str, Any], etag: str) -> Any:
 @api.get("/session")
 @api_login_required
 def session_info() -> Any:
-    from .validation import CATEGORIES, CONDITIONS
+    from .validation import CATEGORIES, CONDITIONS, VILLAGES
 
     return _ok({
         "user": current_user(),
         "csrf_token": csrf_token(),
-        "choices": {"categories": CATEGORIES, "conditions": CONDITIONS},
+        "choices": {"categories": CATEGORIES, "conditions": CONDITIONS, "villages": VILLAGES},
     })
 
 
@@ -183,13 +184,16 @@ def catalog() -> Any:
 # -- pieces ------------------------------------------------------------------------
 
 
-def _validate_item(values: dict[str, Any], check_links: bool = True,
-                   legacy_storage: bool = False) -> tuple[dict[str, Any], dict[str, str]]:
+def _validate_item(values: dict[str, Any], check_links: bool = True, legacy_storage: bool = False,
+                   default_village: str = DEFAULT_VILLAGE) -> tuple[dict[str, Any], dict[str, str]]:
     """Validate piece fields. check_links also checks that the catalog entry and
-    places exist; it reads the database, so it can't run under a row lock."""
+    places exist and belong to the piece's village; it reads the database, so it
+    can't run under a row lock. A piece sent without a village (by an older
+    phone app) gets default_village."""
     from .views import _check_catalog_link, _check_places
 
-    data, errors = parse_item_form(json_to_form(values), legacy_storage=legacy_storage)
+    data, errors = parse_item_form(json_to_form(values), legacy_storage=legacy_storage,
+                                   default_village=default_village)
     if check_links:
         _check_catalog_link(data, errors)
         _check_places(data, errors, PLACE_FIELDS)
@@ -201,8 +205,10 @@ def _sends_legacy_storage(fields: dict[str, Any]) -> bool:
     return "storage_place_id" not in fields and any(c in fields for c in STORAGE_COLUMNS)
 
 
-def _changed_places_problem(changes: dict[str, Any], keys: tuple[str, ...]) -> dict[str, str]:
-    """Errors for places in changes that don't exist or are the wrong kind (checked before the row lock)."""
+def _changed_places_problem(changes: dict[str, Any], keys: tuple[str, ...],
+                            village: str | None = None) -> dict[str, str]:
+    """Errors for places in changes that don't exist or are the wrong kind (checked
+    before the row lock). With village, also for places in another village."""
     from .views import _check_places
 
     data: dict[str, Any] = {}
@@ -212,7 +218,8 @@ def _changed_places_problem(changes: dict[str, Any], keys: tuple[str, ...]) -> d
             data[key] = parse_positive_int(str(changes[key]))
             if data[key] is None:
                 errors[key] = "Choose a place from the list."
-    _check_places(data, errors, tuple(k for k in data if data[k] is not None))
+    _check_places(data, errors, tuple(k for k in data if data[k] is not None), village=village,
+                  check_village=village is not None)
     return errors
 
 
@@ -242,16 +249,29 @@ def create_item() -> Any:
 @api.patch("/items/<int:item_id>")
 @api_login_required
 def patch_item(item_id: int) -> Any:
+    from .views import _place_tree, _place_village_errors, catalog_village_problem
+
     base, changes = clean_changes(_json_body(), ITEM_COLUMNS)
+    repo = _repo()
+    # Everything resolve() needs from the database is read before the row lock:
+    # a query inside resolve() would end its transaction.
+    catalog_villages: dict[int, str | None] = {}
     if changes.get("catalog_id") not in (None, ""):
-        # Checked before taking the row lock: a query inside resolve() would end its transaction.
         catalog_id = parse_positive_int(str(changes["catalog_id"]))
-        if catalog_id is None or _repo().get_catalog_item(catalog_id) is None:
+        entry = repo.get_catalog_item(catalog_id) if catalog_id is not None else None
+        if entry is None:
             return _error(422, "Some fields are not valid.",
                           errors={"catalog_id": "That catalog entry no longer exists; pick the piece again."})
+        catalog_villages[int(entry["id"])] = entry.get("village")
     place_errors = _changed_places_problem(changes, PLACE_FIELDS)
     if place_errors:
         return _error(422, "Some fields are not valid.", errors=place_errors)
+    current_row = repo.get_item(item_id)
+    if current_row and current_row.get("catalog_id") and int(current_row["catalog_id"]) not in catalog_villages:
+        entry = repo.get_catalog_item(int(current_row["catalog_id"]))
+        if entry is not None:
+            catalog_villages[int(entry["id"])] = entry.get("village")
+    tree = _place_tree()
     legacy = _sends_legacy_storage(changes)
 
     def resolve(row: dict[str, Any]) -> tuple[str, Any]:
@@ -261,7 +281,14 @@ def patch_item(item_id: int) -> Any:
         if conflicts:
             return "conflict", conflicts
         data, errors = _validate_item({k: merged[k] for k in ITEM_COLUMNS}, check_links=False,
-                                      legacy_storage=legacy)
+                                      legacy_storage=legacy, default_village=row.get("village") or DEFAULT_VILLAGE)
+        if not errors:
+            # The piece's places and catalog entry must belong to its village.
+            _place_village_errors(data, errors, PLACE_FIELDS, data["village"], tree)
+            if data.get("catalog_id") is not None and int(data["catalog_id"]) in catalog_villages:
+                problem = catalog_village_problem(catalog_villages[int(data["catalog_id"])], data["village"])
+                if problem:
+                    errors["catalog_id"] = problem
         if errors:
             return "invalid", errors
         # Move the piece only if the old-style values really changed: a piece in a
@@ -270,7 +297,7 @@ def patch_item(item_id: int) -> Any:
             data["_legacy_storage"] = True
         return "ok", data
 
-    status, payload, row = _repo().patch_item(item_id, resolve)
+    status, payload, row = repo.patch_item(item_id, resolve)
     if status == "missing":
         return _error(404, "That piece no longer exists.")
     if status == "conflict":
@@ -294,11 +321,13 @@ def create_extra(item_id: int) -> Any:
         raise SyncError('"fields" must be an object with extra fields only.')
     from .views import _check_places
 
+    repo = _repo()
+    item = repo.get_item(item_id)
     data, errors = parse_extra_form(json_to_form(fields))
-    _check_places(data, errors, ("storage_place_id",))
+    _check_places(data, errors, ("storage_place_id",), village=item["village"] if item else None,
+                  check_village=item is not None)
     if errors:
         return _error(422, "Some fields are not valid.", errors=errors)
-    repo = _repo()
     extra_id, created = repo.add_extra_from_client(item_id, data, client_uuid)
     if extra_id is None:
         return _error(404, "That piece no longer exists.")
@@ -312,7 +341,8 @@ def create_extra(item_id: int) -> Any:
 @api_login_required
 def patch_extra(item_id: int, extra_id: int) -> Any:
     base, changes = clean_changes(_json_body(), EXTRA_COLUMNS)
-    place_errors = _changed_places_problem(changes, ("storage_place_id",))
+    item = _repo().get_item(item_id)
+    place_errors = _changed_places_problem(changes, ("storage_place_id",), item["village"] if item else None)
     if place_errors:
         return _error(422, "Some fields are not valid.", errors=place_errors)
 

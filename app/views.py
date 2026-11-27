@@ -23,6 +23,7 @@ from flask import (
     render_template,
     request,
     send_from_directory,
+    session,
     url_for,
 )
 
@@ -40,8 +41,10 @@ from .auth import (
 )
 from .repository import PAGE_SIZE, DuplicatePlace, VersionConflict
 from .validation import (
+    DEFAULT_VILLAGE,
     ITEM_BOOL_FIELDS,
     ITEM_COLUMNS,
+    VILLAGES,
     MEASUREMENT_FIELDS,
     PLACE_FIELDS,
     format_inches,
@@ -54,6 +57,7 @@ from .validation import (
     parse_list_filters,
     parse_place_form,
     parse_positive_int,
+    parse_village,
 )
 
 log = logging.getLogger("dickens.views")
@@ -113,7 +117,7 @@ _FIELD_LABELS = {
     "on_display": "On display", "height_in": "Height", "width_in": "Width", "depth_in": "Depth",
     "box_height_in": "Box height", "box_width_in": "Box width", "box_depth_in": "Box depth",
     "catalog_id": "Catalog link", "description": "Description", "quantity": "Quantity",
-    "storage_place_id": "Storage place", "display_place_id": "Display spot",
+    "storage_place_id": "Storage place", "display_place_id": "Display spot", "village": "Village",
 }
 
 
@@ -140,6 +144,8 @@ def _changed_fields(submitted: dict[str, Any], saved: dict[str, Any]) -> list[tu
                 shown = "Yes" if value else "No"
             elif key in PLACE_FIELDS and value not in (None, ""):
                 shown = _place_tree().path_text(int(value)) or value
+            elif key == "village":
+                shown = VILLAGES.get(str(value), value)
             changed.append((_FIELD_LABELS.get(key, key), "(blank)" if shown in (None, "") else str(shown)))
     return changed or [("(no visible fields)", "only the version number changed")]
 
@@ -156,17 +162,65 @@ def _extra_values(extra: dict[str, Any]) -> dict[str, Any]:
             "storage_place_id": extra.get("storage_place_id")}
 
 
+# -- villages ------------------------------------------------------------------
+# The village being looked at is kept in the session. The collection list,
+# summary, storage and catalog pages show that village only; a piece or place
+# page shows whatever village it belongs to.
+
+SESSION_VILLAGE = "village"
+
+
+@bp.app_template_global("current_village")
+def current_village() -> str:
+    return parse_village(session.get(SESSION_VILLAGE)) or DEFAULT_VILLAGE
+
+
+@bp.app_template_global("village_name")
+def village_name(village: str | None) -> str:
+    return VILLAGES.get(village or DEFAULT_VILLAGE, village or "")
+
+
+# Where switching village lands: the same section, never a page that belongs to
+# the other village (a piece, a place) or a filtered list that would be empty.
+_VILLAGE_LANDINGS = {"/items": "main.item_list", "/items/new": "main.item_new", "/storage": "main.storage",
+                     "/catalog": "main.catalog_browse", "/summary": "main.summary"}
+
+
+@bp.post("/village")
+@login_required
+def village_switch() -> Any:
+    check_csrf()
+    village = parse_village(request.form.get("village"))
+    if village is None:
+        abort(400)
+    session[SESSION_VILLAGE] = village
+    endpoint = _VILLAGE_LANDINGS.get(request.form.get("next", ""), "main.item_list")
+    return redirect(url_for(endpoint))
+
+
 def _place_tree() -> PlaceTree:
-    """Every storage place, read once per request."""
+    """Every storage place of every village, read once per request."""
     if "place_tree" not in g:
         g.place_tree = PlaceTree(repo().list_places())
     return g.place_tree
 
 
+def _place_village_errors(data: dict[str, Any], errors: dict[str, str], fields: tuple[str, ...],
+                          village: str, tree: PlaceTree) -> None:
+    """Record an error for a place that belongs to a different village."""
+    for key in fields:
+        place_village = tree.village_of(data.get(key)) if data.get(key) is not None else None
+        if place_village is not None and place_village != village and key not in errors:
+            errors[key] = (f"That place is in {village_name(place_village)}. "
+                           f"Choose one in {village_name(village)}.")
+
+
 def _check_places(data: dict[str, Any], errors: dict[str, str],
-                  fields: tuple[str, ...] = PLACE_FIELDS) -> None:
-    """Record an error for a place that doesn't exist, or a storage place used as a
-    display spot (or the other way round)."""
+                  fields: tuple[str, ...] = PLACE_FIELDS, village: str | None = None,
+                  check_village: bool = True) -> None:
+    """Record an error for a place that doesn't exist, a storage place used as a
+    display spot (or the other way round), or (with check_village) a place in
+    another village. The village is the piece's: data["village"] unless given."""
     tree = _place_tree()
     for key in fields:
         place_id = data.get(key)
@@ -180,6 +234,8 @@ def _check_places(data: dict[str, Any], errors: dict[str, str],
         elif bool(place.get("is_display")) != want_display:
             errors[key] = ("Choose a display spot." if want_display
                            else "Choose a storage place, not a display spot.")
+    if check_village:
+        _place_village_errors(data, errors, fields, village or data.get("village") or DEFAULT_VILLAGE, tree)
 
 
 # Template functions (also visible inside imported macros). The places table is
@@ -190,18 +246,32 @@ def _place_path(place_id: Any) -> str:
 
 
 @bp.app_template_global("place_options")
-def _place_options(display: bool | None = None) -> list[tuple[int, str]]:
-    return _place_tree().options(display)
+def _place_options(display: bool | None = None, village: str | None = None) -> list[tuple[int, str]]:
+    """Places for a picker: the given village's, or the current village's."""
+    return _place_tree().options(display, village or current_village())
+
+
+def catalog_village_problem(entry_village: str | None, village: str) -> str | None:
+    """Why a piece in `village` can't be linked to a catalog entry of `entry_village`."""
+    if entry_village is None or entry_village == village:
+        return None
+    return (f"That catalog entry is from the {village_name(entry_village)} lists; "
+            f"this piece is in {village_name(village)}. Pick another entry or remove the link.")
 
 
 def _check_catalog_link(data: dict[str, Any], errors: dict[str, str]) -> dict[str, Any] | None:
-    """Return the linked catalog entry, or record an error if the link points nowhere."""
+    """Return the linked catalog entry, or record an error if the link points nowhere
+    or to an entry of another village."""
     if data.get("catalog_id") is None:
         return None
     entry = repo().get_catalog_item(data["catalog_id"])
     if entry is None:
         errors["catalog_id"] = "That catalog entry no longer exists; pick the piece again."
         data["catalog_id"] = None
+        return None
+    problem = catalog_village_problem(entry.get("village"), data.get("village") or DEFAULT_VILLAGE)
+    if problem:
+        errors["catalog_id"] = problem
     return entry
 
 
@@ -209,6 +279,7 @@ def _form_from_catalog(row: dict[str, Any]) -> dict[str, str]:
     """Form values for a new piece, prefilled from a catalog entry (same fields as the lookup script)."""
     values = {
         "catalog_id": str(row["id"]),
+        "village": row.get("village") or current_village(),
         "name": row["name"],
         "item_number": row["item_number"] or "",
         "category": row["default_category"] or "",
@@ -227,6 +298,7 @@ def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
         "id": row["id"],
         "list": row["list_name"],
         "list_label": list_label(row["list_name"]),
+        "village": row.get("village"),
         "item_number": row["item_number"],
         "name": row["name"],
         "details": row["details"],
@@ -359,6 +431,7 @@ def index() -> Any:
 @login_required
 def item_list() -> Any:
     filters = parse_list_filters(request.args)
+    filters["village"] = current_village()
     items, total = repo().list_items(filters)
     pages = max(math.ceil(total / PAGE_SIZE), 1)
 
@@ -383,7 +456,7 @@ def item_list() -> Any:
 def item_new() -> Any:
     if request.method == "POST":
         check_csrf()
-        data, errors = parse_item_form(request.form)
+        data, errors = parse_item_form(request.form, default_village=current_village())
         catalog = _check_catalog_link(data, errors)
         _check_places(data, errors)
         if not errors:
@@ -397,7 +470,7 @@ def item_new() -> Any:
             ),
             400,
         )
-    preset: dict[str, str] = {"category": request.args.get("category", "")}
+    preset: dict[str, str] = {"category": request.args.get("category", ""), "village": current_village()}
     catalog = None
     catalog_id = parse_positive_int(request.args.get("catalog_id"))
     if catalog_id is not None:
@@ -409,6 +482,7 @@ def item_new() -> Any:
         place_id = parse_positive_int(request.args.get(arg))
         if place_id is not None:
             preset[key] = str(place_id)
+            preset["village"] = _place_tree().village_of(place_id) or preset["village"]
     return render_template(
         "item_form.html", form=preset, errors={}, item=None, catalog=catalog,
         suggestions=_storage_suggestions(),
@@ -449,7 +523,7 @@ def item_edit(item_id: int) -> Any:
     item = _item_or_404(item_id)
     if request.method == "POST":
         check_csrf()
-        data, errors = parse_item_form(request.form)
+        data, errors = parse_item_form(request.form, default_village=item["village"])
         catalog = _check_catalog_link(data, errors)
         _check_places(data, errors)
         stale = None if errors else _stale_fields(
@@ -509,7 +583,7 @@ def extra_add(item_id: int) -> Any:
     check_csrf()
     item = _item_or_404(item_id)
     data, errors = parse_extra_form(request.form)
-    _check_places(data, errors, ("storage_place_id",))
+    _check_places(data, errors, ("storage_place_id",), village=item["village"])
     if errors:
         r = repo()
         return (
@@ -544,7 +618,7 @@ def extra_edit(item_id: int, extra_id: int) -> Any:
     if request.method == "POST":
         check_csrf()
         data, errors = parse_extra_form(request.form)
-        _check_places(data, errors, ("storage_place_id",))
+        _check_places(data, errors, ("storage_place_id",), village=item["village"])
         saved = _extra_values(extra)
         stale = None if errors else _stale_fields(request.form.get("version"), extra, data, saved)
         if not errors and not stale:
@@ -593,7 +667,8 @@ def link_add(item_id: int) -> Any:
     _item_or_404(item_id)
     other_id = parse_positive_int(request.form.get("other_id"))
     if other_id is None or not repo().add_link(item_id, other_id):
-        flash("Pick a piece to link. A building can only be linked to figures or accessories.", "error")
+        flash("Pick a piece to link. A building can only be linked to figures or accessories "
+              "of the same village.", "error")
     else:
         flash("Linked.", "success")
     return redirect(url_for("main.item_detail", item_id=item_id) + "#links")
@@ -907,7 +982,9 @@ def scan_delete(scan_id: int) -> Any:
 @login_required
 def catalog_search() -> Any:
     query = request.args.get("q", "")
-    results = repo().search_catalog(query) if len(query.strip()) >= 2 else []
+    # The lookup on a piece's form sends the village chosen on the form.
+    village = parse_village(request.args.get("village")) or current_village()
+    results = repo().search_catalog(query, village=village) if len(query.strip()) >= 2 else []
     response = jsonify({"results": [_catalog_json(row) for row in results]})
     response.headers["Cache-Control"] = "private, no-store"
     return response
@@ -929,7 +1006,8 @@ def catalog_browse() -> Any:
     if filtered or len(query) >= 2:
         results, total = repo().browse_catalog(query if len(query) >= 2 else "", missing_photos=missing,
                                                owned_only=owned, limit=CATALOG_PAGE_SIZE,
-                                               offset=(page - 1) * CATALOG_PAGE_SIZE)
+                                               offset=(page - 1) * CATALOG_PAGE_SIZE,
+                                               village=current_village())
     pages = max(math.ceil(total / CATALOG_PAGE_SIZE), 1)
 
     def page_url(number: int) -> str:
@@ -1052,12 +1130,14 @@ def catalog_photo_delete(photo_id: int) -> Any:
 @login_required
 def storage() -> Any:
     tree = _place_tree()
+    village = current_village()
     totals: dict[int, dict[str, int]] = {}
-    for row, _depth in tree.walk():
+    for row, _depth in tree.walk(village=village):
         sub = tree.descendants(int(row["id"]))
         totals[int(row["id"])] = {
             key: sum(int(tree.by_id[i].get(key) or 0) for i in sub) for key in ("items", "displayed", "extras")}
-    return render_template("storage.html", tree=tree, totals=totals, unplaced=repo().count_unplaced())
+    return render_template("storage.html", tree=tree, roots=tree.roots(village), totals=totals,
+                           unplaced=repo().count_unplaced(village))
 
 
 def _place_or_404(place_id: int) -> dict[str, Any]:
@@ -1086,11 +1166,15 @@ def place_detail(place_id: int) -> Any:
 
 def _place_form_page(place: dict[str, Any] | None, form: Any, errors: dict[str, str], status: int = 200) -> Any:
     tree = _place_tree()
-    # A place can't move inside itself or a place within it.
+    # A place can't move inside itself or a place within it, or into another village.
     excluded = set(tree.descendants(int(place["id"]))) if place else set()
-    parents = [(pid, text) for pid, text in tree.options() if pid not in excluded]
+    if place:
+        village = tree.village_of(int(place["id"]))
+    else:  # "Add a place inside" from a place's page: the parent's village
+        village = tree.village_of(parse_positive_int(str(form.get("parent_id") or ""))) or current_village()
+    parents = [(pid, text) for pid, text in tree.options(village=village) if pid not in excluded]
     return render_template("place_form.html", place=place, form=form, errors=errors, parents=parents,
-                           kinds=KIND_SUGGESTIONS), status
+                           kinds=KIND_SUGGESTIONS, village=village), status
 
 
 @bp.route("/places/new", methods=["GET", "POST"])
@@ -1104,6 +1188,7 @@ def place_new() -> Any:
         return _place_form_page(None, form, {})
     check_csrf()
     data, errors = parse_place_form(request.form)
+    data["village"] = current_village()  # a place inside another takes its parent's village
     tree = _place_tree()
     if data["parent_id"] is not None and data["parent_id"] not in tree:
         errors["parent_id"] = "That place no longer exists; choose another."
@@ -1168,7 +1253,7 @@ def place_delete(place_id: int) -> Any:
 @bp.get("/summary")
 @login_required
 def summary() -> Any:
-    return render_template("summary.html", summary=repo().collection_summary())
+    return render_template("summary.html", summary=repo().collection_summary(current_village()))
 
 
 # -- export ------------------------------------------------------------------

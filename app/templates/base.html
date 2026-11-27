@@ -24,6 +24,13 @@
     {% if current_user() %}
     <button type="button" id="nav-toggle" class="nav-toggle" aria-controls="site-nav" aria-expanded="false" hidden>Menu</button>
     <nav id="site-nav" aria-label="Main">
+      <form method="post" action="{{ url_for('main.village_switch') }}" class="village-switch" aria-label="Village">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="{{ request.path }}">
+        {%- for key, name in VILLAGES.items() %}
+        <button type="submit" name="village" value="{{ key }}"{% if key == current_village() %} class="current" aria-pressed="true"{% else %} aria-pressed="false"{% endif %}>{{ name }}</button>
+        {%- endfor %}
+      </form>
       <a href="{{ url_for('main.item_list') }}">Collection</a>
       <a href="{{ url_for('main.storage') }}">Storage</a>
       <a href="{{ url_for('main.catalog_browse') }}">Catalog</a>

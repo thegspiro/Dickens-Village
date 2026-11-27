@@ -38,5 +38,15 @@ profile also drops pieces listed twice with the same years and prices, and repor
 Canadian prices that can't both be right. The default profile, `dickens-2025`, still
 reproduces `dickens_village_2025.csv` byte for byte.
 
+The Holy Land lists use `--section` so each piece gets the series of the heading it sits under:
+
+```sh
+python dump_lines.py Holy_Land.pdf 500 /tmp/hl.json --retired-x 370 --section '^Holy Land™ Collection'
+python dump_lines.py Holy_Land_acc.pdf 500 /tmp/ha.json --retired-x 370 --section '^Holy Land™ Collection'
+python build_records.py --out /tmp/holy-records.json holy-land-lighted=/tmp/hl.json holy-land-accessories=/tmp/ha.json
+python normalize.py /tmp/holy-records.json ../../data/catalog/holy_land.csv \
+    ../../data/catalog/holy_land_source_issues.txt --profile holy-land
+```
+
 A different year's PDF may lay out differently, so check the output against the PDF before
 committing it. Every row keeps its `source_page` and original `source_text` for that purpose.

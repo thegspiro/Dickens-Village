@@ -115,8 +115,8 @@ def collection_json(data: dict[str, list[dict[str, Any]]], exported_at: dt.datet
         "format_version": FORMAT_VERSION,
         "exported_at": exported_at.isoformat(timespec="seconds"),
         "places": [{
-            "id": row["id"], "parent_id": row.get("parent_id"), "name": row["name"], "kind": row.get("kind"),
-            "is_display": bool(row.get("is_display")), "notes": row.get("notes"),
+            "id": row["id"], "village": row.get("village"), "parent_id": row.get("parent_id"), "name": row["name"],
+            "kind": row.get("kind"), "is_display": bool(row.get("is_display")), "notes": row.get("notes"),
             "path": tree.path_text(int(row["id"])),
         } for row in data.get("places", [])],
         "pieces": pieces,

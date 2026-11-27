@@ -16,6 +16,18 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   {% if version is defined and version %}<input type="hidden" name="version" value="{{ version }}">{% endif %}
 
+  {% set form_village = form.get('village') or (item.village if item else current_village()) %}
+  {% if form_village not in VILLAGES %}{% set form_village = current_village() %}{% endif %}
+  <div class="grid">
+    <div>
+      <label for="village">Village</label>
+      <select id="village" name="village">
+        {% for key, name in VILLAGES.items() %}<option value="{{ key }}"{% if key == form_village %} selected{% endif %}>{{ name }}</option>{% endfor %}
+      </select>
+      {{ field_error(errors, 'village') }}
+    </div>
+  </div>
+
   <section class="catalog-lookup" data-search-url="{{ url_for('main.catalog_search') }}" hidden>
     <label for="catalog-lookup">Look up in catalog</label>
     <div class="combo">
@@ -67,11 +79,12 @@
   <fieldset>
     <legend>Storage</legend>
     <div class="grid">
-      <div class="wide">{{ place_select(form, errors, 'storage_place_id', 'Stored in', place_options(False), 'Not assigned', hint='Where it goes when it is put away.') }}</div>
-      <div class="wide">{{ place_select(form, errors, 'display_place_id', 'Display spot', place_options(True), 'None', hint='Where it goes when it is put out.') }}</div>
+      <div class="wide">{{ place_select(form, errors, 'storage_place_id', 'Stored in', place_options(False, form_village), 'Not assigned', hint='Where it goes when it is put away.') }}</div>
+      <div class="wide">{{ place_select(form, errors, 'display_place_id', 'Display spot', place_options(True, form_village), 'None', hint='Where it goes when it is put out.') }}</div>
       <div class="checks">{{ checkbox(form, 'on_display', 'Currently on display') }}</div>
     </div>
-    <p class="hint"><a href="{{ url_for('main.storage') }}">Add or change storage places and display spots</a></p>
+    <p class="hint">These are {{ village_name(form_village) }}'s places. If you change the village above, save first and then choose places in the new village.
+      <a href="{{ url_for('main.storage') }}">Add or change storage places and display spots</a></p>
   </fieldset>
 
   <fieldset>

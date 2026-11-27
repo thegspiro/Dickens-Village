@@ -2,7 +2,7 @@
 {% block title %}Catalog{% endblock %}
 {% block content %}
 <div class="title-row">
-  <h1>Catalog</h1>
+  <h1>Catalog <span class="muted">· {{ village_name(current_village()) }}</span></h1>
   <div class="actions"><a class="button" href="{{ url_for('main.catalog_bulk') }}">Add photos by item number</a></div>
 </div>
 <form method="get" action="{{ url_for('main.catalog_browse') }}" class="card">
@@ -13,6 +13,7 @@
     <label class="check"><input type="checkbox" name="owned" value="1"{% if owned %} checked{% endif %}> Only pieces I own</label>
   </div>
   <button type="submit">{{ 'Search' if not filtered else 'Show' }}</button>
+  <p class="hint">Searches the {{ village_name(current_village()) }} lists and the General Village Accessories.</p>
 </form>
 
 {% if query and query|length < 2 and not filtered %}

@@ -349,3 +349,34 @@ test("an edit an older app version left in Location/Tub/Tray is still sent", () 
   assert.deepEqual(done.dirty, {});
   assert.equal(done.local.storage_place_id, 9);
 });
+
+test("villages: pieces and places without one are Dickens' Village", () => {
+  assert.equal(m.villageOf({}), "dickens");
+  assert.equal(m.villageOf({ village: "holy-land" }), "holy-land");
+  assert.ok(m.ITEM_FIELDS.includes("village"));
+});
+
+test("place options can be limited to one village", () => {
+  const tree = m.placeTree([
+    { id: 1, parent_id: null, name: "Garage", kind: null, is_display: false },            // from before villages
+    { id: 2, parent_id: 1, name: "1", kind: "Tub", is_display: false },
+    { id: 3, parent_id: null, name: "Garage", kind: null, is_display: false, village: "holy-land" },
+    { id: 4, parent_id: 3, name: "1", kind: "Tub", is_display: false, village: "holy-land" },
+    { id: 5, parent_id: null, name: "Mantel", kind: null, is_display: true, village: "holy-land" },
+  ]);
+  assert.deepEqual(tree.options(false, "dickens").map((o) => o.id), [1, 2]);
+  assert.deepEqual(tree.options(false, "holy-land").map((o) => o.id), [3, 4]);
+  assert.deepEqual(tree.options(true, "holy-land").map((o) => o.id), [5]);
+  assert.equal(tree.options(false).length, 4);
+});
+
+test("catalog search keeps a village's lists and the lists for every village", () => {
+  const entries = [
+    { id: 1, item_number: "56.59757", name: "Little Town Of Bethlehem", village: "holy-land" },
+    { id: 2, item_number: "56.65005", name: "Christmas Carol Cottage", village: "dickens" },
+    { id: 3, item_number: "56.59960", name: "Village Double Street Lamps", village: null },
+  ];
+  assert.deepEqual(m.searchCatalog(entries, "56.5", 15, "holy-land").map((e) => e.id), [1, 3]);
+  assert.deepEqual(m.searchCatalog(entries, "56.", 15, "dickens").map((e) => e.id), [3, 2]);
+  assert.deepEqual(m.searchCatalog(entries, "56.").map((e) => e.id).sort(), [1, 2, 3]);
+});

@@ -28,7 +28,7 @@
  * and the server turns it into a place.
  */
 export const ITEM_FIELDS = [
-  "category", "name", "item_number", "series", "purchased_from", "condition_notes", "notes",
+  "category", "village", "name", "item_number", "series", "purchased_from", "condition_notes", "notes",
   "year_introduced", "year_retired", "purchase_date", "price_paid", "estimated_value", "condition_grade",
   "condition_checked_on", "has_original_box", "has_sleeve", "on_display", "height_in", "width_in",
   "depth_in", "box_height_in", "box_width_in", "box_depth_in", "catalog_id", "storage_place_id",
@@ -36,6 +36,23 @@ export const ITEM_FIELDS = [
 ];
 
 export const EXTRA_FIELDS = ["description", "quantity", "condition_grade", "notes", "storage_place_id"];
+
+/*
+ * Villages: each piece and storage place belongs to one. Pieces and places
+ * stored by a version of the app from before villages (no village value)
+ * are Dickens' Village, as they are on the server.
+ */
+export const DEFAULT_VILLAGE = "dickens";
+export const VILLAGES = { dickens: "Dickens' Village", "holy-land": "Holy Land Village" };
+
+export function villageOf(values) {
+  return (values && values.village) || DEFAULT_VILLAGE;
+}
+
+/* Catalog entries for a village: its own lists and those for every village (no village). */
+export function forVillage(entry, village) {
+  return !entry.village || entry.village === village;
+}
 
 /*
  * Storage places from the snapshot, for paths and pickers.
@@ -93,11 +110,15 @@ export function placeTree(rows) {
 
   function pathText(id) { return path(id).map(placeLabel).join(" › "); }
 
-  /* [{id, text}] in tree order; display true/false keeps only display spots or storage places. */
-  function options(display) {
+  /*
+   * [{id, text}] in tree order; display true/false keeps only display spots or
+   * storage places. With village, only that village's places.
+   */
+  function options(display, village) {
     var out = [];
     (function walk(parent) {
       (children[parent] || []).forEach(function (p) {
+        if (parent === "" && village !== undefined && villageOf(p) !== village) return;
         if (display === undefined || Boolean(p.is_display) === display) out.push({ id: p.id, text: pathText(p.id) });
         walk(p.id);
       });
@@ -394,14 +415,18 @@ export function fitWithin(width, height, max) {
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
-/* Catalog search on the phone, ranked like the server: item numbers first. */
-export function searchCatalog(entries, query, limit) {
+/*
+ * Catalog search on the phone, ranked like the server: item numbers first.
+ * With village, only entries for that village or for every village.
+ */
+export function searchCatalog(entries, query, limit, village) {
   var q = String(query || "").trim().toLowerCase().replace(/\s+/g, " ");
   if (q.length < 2) return [];
   var digits = q.replace(/\D/g, "");
   var hits = [];
   entries.forEach(function (e) {
     if (e.listed === false) return; // removed from the reference lists: kept only for pieces linked to it
+    if (village !== undefined && !forVillage(e, village)) return;
     var num = String(e.item_number || "").toLowerCase();
     var name = String(e.name || "").toLowerCase();
     var rank = -1;
