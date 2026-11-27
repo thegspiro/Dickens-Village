@@ -14,7 +14,6 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .auth import LoginThrottle, csrf_token, current_user
-from .catalog import list_label
 from .config import Config, load_config
 from .places import label as place_label
 from .validation import CATEGORIES, CONDITIONS, format_inches
@@ -102,6 +101,10 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
     app.jinja_env.filters["nicedate"] = _date
     app.jinja_env.filters["inches"] = format_inches
     app.jinja_env.filters["place_label"] = place_label
+    # Imported here, not at the top: the entrypoint runs app.catalog as a script
+    # (python -m app.catalog), which warns if importing the app package loaded it first.
+    from .catalog import list_label
+
     app.jinja_env.filters["catalog_list"] = list_label
     app.jinja_env.globals.update(
         csrf_token=csrf_token,
