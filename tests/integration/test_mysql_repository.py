@@ -154,7 +154,8 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
             assert cur.fetchone() is None
         assert migrate.migrate_up(conn, migrations) == [
             "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
-            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places"]
+            "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places",
+            "0010_villages"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -549,6 +550,7 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
     target = by_version["0007_photo_order_captions"]
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, list(by_version.values())) == "0010_villages"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0009_storage_places"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0008_catalog_listed"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0007_photo_order_captions"
@@ -563,7 +565,8 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
                             (item_id, f"{name:0<32}.jpg"))
         conn.commit()
         assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions",
-                                                                       "0008_catalog_listed", "0009_storage_places"]
+                                                                       "0008_catalog_listed", "0009_storage_places",
+                                                                       "0010_villages"]
 
         def order(item_id):
             with conn.cursor() as cur:
