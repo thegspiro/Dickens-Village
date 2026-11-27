@@ -16,6 +16,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .auth import LoginThrottle, csrf_token, current_user
 from .config import Config, load_config
 from .places import label as place_label
+from .money import CURRENCIES
 from .validation import CATEGORIES, CONDITIONS, VILLAGES, format_inches
 
 RepoFactory = Callable[[Config], Any]
@@ -111,6 +112,7 @@ def create_app(config: Config | None = None, repo_factory: RepoFactory | None = 
         current_user=current_user,
         CATEGORIES=CATEGORIES,
         VILLAGES=VILLAGES,
+        CURRENCIES=CURRENCIES,
         CONDITIONS=CONDITIONS,
     )
 

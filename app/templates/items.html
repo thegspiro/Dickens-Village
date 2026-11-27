@@ -85,7 +85,7 @@
       <td data-label="Condition">{{ condition_badge(item.condition_grade) }}</td>
       <td data-label="Storage">{{ storage_text(item) }}</td>
       <td data-label="Extras">{{ item.extras_count or '' }}</td>
-      <td data-label="Est. value" class="num">{{ item.estimated_value | money }}</td>
+      <td data-label="Est. value" class="num">{{ show_money(item.estimated_value, item.currency).text }}</td>
     </tr>
   {% endfor %}
   </tbody>

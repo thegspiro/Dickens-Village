@@ -27,7 +27,7 @@ from flask import (
     url_for,
 )
 
-from . import catalog_match, export, photos, scans
+from . import catalog_match, export, money, photos, scans
 from .catalog import list_label
 from .places import KIND_SUGGESTIONS, MAX_DEPTH, PlaceTree
 from .auth import (
@@ -57,6 +57,7 @@ from .validation import (
     parse_list_filters,
     parse_place_form,
     parse_positive_int,
+    parse_settings_form,
     parse_village,
 )
 
@@ -160,6 +161,35 @@ def _extra_values(extra: dict[str, Any]) -> dict[str, Any]:
     return {"description": extra["description"], "quantity": extra["quantity"],
             "condition_grade": extra["condition_grade"], "notes": extra["notes"],
             "storage_place_id": extra.get("storage_place_id")}
+
+
+# -- money -------------------------------------------------------------------------
+# Amounts are kept in the currency they were entered in and shown in the site
+# currency chosen on the Settings page (see app/money.py).
+
+
+@bp.app_template_global("money_settings")
+def money_settings() -> money.MoneySettings:
+    """The site currency and exchange rate, read once per request."""
+    if "money_settings" not in g:
+        g.money_settings = money.MoneySettings.from_rows(repo().get_settings())
+    return g.money_settings
+
+
+@bp.app_template_global("show_money")
+def show_money(amount: Any, currency: str | None) -> dict[str, str]:
+    return money.show(amount, currency, money_settings())
+
+
+@bp.app_template_global("retail")
+def retail(entry: dict[str, Any]) -> str:
+    return money.retail(entry.get("srp_usd"), entry.get("srp_cad"), money_settings())
+
+
+@bp.app_template_global("site_money")
+def site_money(amount: Any) -> str:
+    """An amount already in the site currency (a converted total)."""
+    return money.fmt(amount, money_settings().currency, money_settings().currency)
 
 
 # -- villages ------------------------------------------------------------------
@@ -291,7 +321,7 @@ def _form_from_catalog(row: dict[str, Any]) -> dict[str, str]:
 
 
 def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
-    def money(value: Any) -> str | None:
+    def as_money(value: Any) -> str | None:
         return None if value is None else f"{Decimal(value):.2f}"
 
     return {
@@ -307,8 +337,8 @@ def _catalog_json(row: dict[str, Any]) -> dict[str, Any]:
         "year_retired": row["year_retired"],
         "is_current": bool(row["is_current"]),
         "listed": bool(row.get("listed", 1)),
-        "srp_usd": money(row["srp_usd"]),
-        "srp_cad": money(row["srp_cad"]),
+        "srp_usd": as_money(row["srp_usd"]),
+        "srp_cad": as_money(row["srp_cad"]),
         "category": row["default_category"],
         "parent_name": row["parent_name"],
         "url": url_for("main.catalog_entry", catalog_id=row["id"]),
@@ -432,6 +462,7 @@ def index() -> Any:
 def item_list() -> Any:
     filters = parse_list_filters(request.args)
     filters["village"] = current_village()
+    filters["usd_cad_rate"] = money_settings().usd_cad_rate
     items, total = repo().list_items(filters)
     pages = max(math.ceil(total / PAGE_SIZE), 1)
 
@@ -456,7 +487,8 @@ def item_list() -> Any:
 def item_new() -> Any:
     if request.method == "POST":
         check_csrf()
-        data, errors = parse_item_form(request.form, default_village=current_village())
+        data, errors = parse_item_form(request.form, default_village=current_village(),
+                                       default_currency=money_settings().currency)
         catalog = _check_catalog_link(data, errors)
         _check_places(data, errors)
         if not errors:
@@ -470,7 +502,8 @@ def item_new() -> Any:
             ),
             400,
         )
-    preset: dict[str, str] = {"category": request.args.get("category", ""), "village": current_village()}
+    preset: dict[str, str] = {"category": request.args.get("category", ""), "village": current_village(),
+                              "currency": money_settings().currency}
     catalog = None
     catalog_id = parse_positive_int(request.args.get("catalog_id"))
     if catalog_id is not None:
@@ -523,7 +556,8 @@ def item_edit(item_id: int) -> Any:
     item = _item_or_404(item_id)
     if request.method == "POST":
         check_csrf()
-        data, errors = parse_item_form(request.form, default_village=item["village"])
+        data, errors = parse_item_form(request.form, default_village=item["village"],
+                                       default_currency=item.get("currency") or money.DEFAULT_CURRENCY)
         catalog = _check_catalog_link(data, errors)
         _check_places(data, errors)
         stale = None if errors else _stale_fields(
@@ -1253,7 +1287,47 @@ def place_delete(place_id: int) -> Any:
 @bp.get("/summary")
 @login_required
 def summary() -> Any:
-    return render_template("summary.html", summary=repo().collection_summary(current_village()))
+    summary_data = repo().collection_summary(current_village())
+    settings = money_settings()
+    rows = summary_data.get("money", [])
+    by_category = {
+        category: {field: money.total([r for r in rows if r["category"] == category], field, settings)
+                   for field in ("total_paid", "total_value")}
+        for category in {r["category"] for r in rows}
+    }
+    overall = {field: money.total(rows, field, settings) for field in ("total_paid", "total_value")}
+    return render_template("summary.html", summary=summary_data, money_overall=overall,
+                           money_by_category=by_category)
+
+
+# -- settings ------------------------------------------------------------------
+
+
+def _settings_form(settings: money.MoneySettings) -> dict[str, str]:
+    return {"currency": settings.currency,
+            "usd_cad_rate": f"{settings.usd_cad_rate.normalize():f}" if settings.usd_cad_rate else ""}
+
+
+@bp.route("/settings", methods=["GET", "POST"])
+@login_required
+def settings_page() -> Any:
+    current = money_settings()
+    if request.method == "GET":
+        return render_template("settings.html", form=_settings_form(current), errors={}, settings=current)
+    check_csrf()
+    data, errors = parse_settings_form(request.form)
+    if errors:
+        return render_template("settings.html", form=request.form, errors=errors, settings=current), 400
+    values: dict[str, str | None] = {"currency": data["currency"]}
+    rate = data["usd_cad_rate"]
+    if rate is None:
+        values.update(usd_cad_rate=None, usd_cad_rate_set_on=None)
+    elif rate != current.usd_cad_rate:
+        values.update(usd_cad_rate=f"{rate.normalize():f}", usd_cad_rate_set_on=dt.date.today().isoformat())
+    repo().save_settings(values)
+    log.info("Site currency set to %s", data["currency"])
+    flash("Settings saved.", "success")
+    return redirect(url_for("main.settings_page"))
 
 
 # -- export ------------------------------------------------------------------

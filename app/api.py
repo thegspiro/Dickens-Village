@@ -28,6 +28,7 @@ from .sync import (
     merge,
     place_to_json,
 )
+from .money import DEFAULT_CURRENCY
 from .validation import (
     DEFAULT_VILLAGE,
     ITEM_COLUMNS,
@@ -130,12 +131,18 @@ def _with_etag(payload: dict[str, Any], etag: str) -> Any:
 @api.get("/session")
 @api_login_required
 def session_info() -> Any:
+    from .money import CURRENCIES
     from .validation import CATEGORIES, CONDITIONS, VILLAGES
+    from .views import money_settings
 
+    settings = money_settings()
     return _ok({
         "user": current_user(),
         "csrf_token": csrf_token(),
-        "choices": {"categories": CATEGORIES, "conditions": CONDITIONS, "villages": VILLAGES},
+        "choices": {"categories": CATEGORIES, "conditions": CONDITIONS, "villages": VILLAGES,
+                    "currencies": CURRENCIES},
+        "money": {"currency": settings.currency,
+                  "usd_cad_rate": str(settings.usd_cad_rate) if settings.usd_cad_rate else None},
     })
 
 
@@ -185,15 +192,18 @@ def catalog() -> Any:
 
 
 def _validate_item(values: dict[str, Any], check_links: bool = True, legacy_storage: bool = False,
-                   default_village: str = DEFAULT_VILLAGE) -> tuple[dict[str, Any], dict[str, str]]:
+                   default_village: str = DEFAULT_VILLAGE,
+                   default_currency: str | None = None) -> tuple[dict[str, Any], dict[str, str]]:
     """Validate piece fields. check_links also checks that the catalog entry and
     places exist and belong to the piece's village; it reads the database, so it
     can't run under a row lock. A piece sent without a village (by an older
-    phone app) gets default_village."""
-    from .views import _check_catalog_link, _check_places
+    phone app) gets default_village; one without a currency gets default_currency,
+    or the site currency (which reads the database: pass it under a row lock)."""
+    from .views import _check_catalog_link, _check_places, money_settings
 
     data, errors = parse_item_form(json_to_form(values), legacy_storage=legacy_storage,
-                                   default_village=default_village)
+                                   default_village=default_village,
+                                   default_currency=default_currency or money_settings().currency)
     if check_links:
         _check_catalog_link(data, errors)
         _check_places(data, errors, PLACE_FIELDS)
@@ -281,7 +291,8 @@ def patch_item(item_id: int) -> Any:
         if conflicts:
             return "conflict", conflicts
         data, errors = _validate_item({k: merged[k] for k in ITEM_COLUMNS}, check_links=False,
-                                      legacy_storage=legacy, default_village=row.get("village") or DEFAULT_VILLAGE)
+                                      legacy_storage=legacy, default_village=row.get("village") or DEFAULT_VILLAGE,
+                                      default_currency=row.get("currency") or DEFAULT_CURRENCY)
         if not errors:
             # The piece's places and catalog entry must belong to its village.
             _place_village_errors(data, errors, PLACE_FIELDS, data["village"], tree)

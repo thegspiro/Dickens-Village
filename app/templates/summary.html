@@ -2,12 +2,15 @@
 {% block title %}Summary{% endblock %}
 {% block content %}
 {% set t = summary.totals %}
+{% macro total(result) -%}
+  {{ site_money(result.amount) }}{% for code, amount in result.unconverted.items() %} <span class="muted">+ {{ amount | money }} {{ code }}</span>{% endfor %}
+{%- endmacro %}
 <h1>Collection summary <span class="muted">· {{ village_name(current_village()) }}</span></h1>
 <div class="stats">
   <div class="stat"><span class="stat-value">{{ t.item_count }}</span><span class="stat-label">Pieces</span></div>
   <div class="stat"><span class="stat-value">{{ t.extras_count }}</span><span class="stat-label">Extras</span></div>
-  <div class="stat"><span class="stat-value">{{ t.total_paid | money }}</span><span class="stat-label">Total paid</span></div>
-  <div class="stat"><span class="stat-value">{{ t.total_value | money }}</span><span class="stat-label">Estimated value</span></div>
+  <div class="stat"><span class="stat-value">{{ total(money_overall.total_paid) }}</span><span class="stat-label">Total paid</span></div>
+  <div class="stat"><span class="stat-value">{{ total(money_overall.total_value) }}</span><span class="stat-label">Estimated value</span></div>
   <div class="stat"><span class="stat-value">{{ t.on_display }}</span><span class="stat-label">On display</span></div>
   <div class="stat"><span class="stat-value">{{ t.with_box }}</span><span class="stat-label">With original box</span></div>
 </div>
@@ -21,7 +24,7 @@
     {% for r in summary.by_category %}
       <tr>
         <td><a href="{{ url_for('main.item_list', category=r.category) }}">{{ CATEGORIES[r.category] }}</a></td>
-        <td class="num">{{ r.item_count }}</td><td class="num">{{ r.total_paid | money }}</td><td class="num">{{ r.total_value | money }}</td>
+        <td class="num">{{ r.item_count }}</td>{% set m = money_by_category.get(r.category) %}<td class="num">{{ total(m.total_paid) if m else '' }}</td><td class="num">{{ total(m.total_value) if m else '' }}</td>
       </tr>
     {% else %}<tr><td colspan="4" class="muted">No pieces yet.</td></tr>{% endfor %}
     </tbody>
@@ -42,7 +45,7 @@
   </table>
 </section>
 </div>
-<p class="muted">Totals only include pieces where a price or value has been entered.</p>
+<p class="muted">Totals only include pieces where a price or value has been entered. They are in {{ CURRENCIES[money_settings().currency] }}{% if money_settings().usd_cad_rate %}, converting at 1 USD = {{ money_settings().usd_cad_rate.normalize() }} CAD{% endif %}{% if money_overall.total_paid.unconverted or money_overall.total_value.unconverted %}; amounts after “+” are in another currency and need an exchange rate (<a href="{{ url_for('main.settings_page') }}">Settings</a>){% endif %}.</p>
 
 <section class="card" id="export">
   <h2>Download your collection</h2>

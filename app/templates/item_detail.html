@@ -40,8 +40,10 @@
       <dt>Stored in</dt><dd>{% if item.storage_place_id %}<a href="{{ url_for('main.place_detail', place_id=item.storage_place_id) }}">{{ place_path(item.storage_place_id) }}</a>{% else %}<span class="muted">Not assigned</span>{% endif %}{% if item.on_display %} <span class="badge">On display</span>{% endif %}</dd>
       {% if item.display_place_id %}<dt>Display spot</dt><dd><a href="{{ url_for('main.place_detail', place_id=item.display_place_id) }}">{{ place_path(item.display_place_id) }}</a></dd>{% endif %}
       <dt>Purchased</dt><dd>{{ item.purchase_date | nicedate or '—' }}{% if item.purchased_from %} from {{ item.purchased_from }}{% endif %}</dd>
-      <dt>Price paid</dt><dd>{{ item.price_paid | money or '—' }}</dd>
-      <dt>Estimated value</dt><dd>{{ item.estimated_value | money or '—' }}</dd>
+      {% set paid = show_money(item.price_paid, item.currency) %}
+      {% set value = show_money(item.estimated_value, item.currency) %}
+      <dt>Price paid</dt><dd>{{ paid.text or '—' }}{% if paid.original %} <span class="muted">(entered as {{ paid.original }})</span>{% endif %}</dd>
+      <dt>Estimated value</dt><dd>{{ value.text or '—' }}{% if value.original %} <span class="muted">(entered as {{ value.original }})</span>{% endif %}</dd>
       {% if item.notes %}<dt>Notes</dt><dd class="pre">{{ item.notes }}</dd>{% endif %}
     </dl>
   </section>

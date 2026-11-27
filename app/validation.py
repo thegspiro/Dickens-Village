@@ -7,6 +7,8 @@ import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Mapping
 
+from .money import CURRENCIES, DEFAULT_CURRENCY, parse_rate
+
 CATEGORIES: dict[str, str] = {
     "building": "Building",
     "figure": "Figure / Person",
@@ -58,6 +60,7 @@ ITEM_COLUMNS = (
     "purchase_date",
     "price_paid",
     "estimated_value",
+    "currency",
     "condition_grade",
     "condition_checked_on",
     *ITEM_BOOL_FIELDS,
@@ -225,14 +228,16 @@ def _place_id(form: Mapping[str, str], key: str, errors: dict[str, str]) -> int 
 
 
 def parse_item_form(form: Mapping[str, str], legacy_storage: bool = False,
-                    default_village: str = DEFAULT_VILLAGE) -> tuple[dict[str, Any], dict[str, str]]:
+                    default_village: str = DEFAULT_VILLAGE,
+                    default_currency: str = DEFAULT_CURRENCY) -> tuple[dict[str, Any], dict[str, str]]:
     """Return (clean_data, errors). clean_data has exactly the ITEM_COLUMNS keys.
 
     The storage text columns are read from the form only with legacy_storage
     (values sent by an older phone app); otherwise they are left blank, and
     the repository fills them in from the storage place. A form without a
     village (an older phone app, or a form that doesn't offer the choice)
-    gets default_village.
+    gets default_village; one without a currency (the currency the price paid
+    and estimated value are in) gets default_currency.
     """
     errors: dict[str, str] = {}
     data: dict[str, Any] = {
@@ -262,6 +267,7 @@ def parse_item_form(form: Mapping[str, str], legacy_storage: bool = False,
     data["condition_checked_on"] = _date(form, "condition_checked_on", errors)
     data["price_paid"] = _money(form, "price_paid", errors)
     data["estimated_value"] = _money(form, "estimated_value", errors)
+    data["currency"] = _choice(form, "currency", CURRENCIES, errors, required=False) or default_currency
     data["condition_grade"] = _choice(form, "condition_grade", CONDITIONS, errors, required=False)
     for key in ITEM_BOOL_FIELDS:
         data[key] = _bool(form, key)
@@ -304,6 +310,19 @@ def parse_extra_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str,
 
 
 PLACE_TEXT_FIELDS: dict[str, int] = {"name": 120, "kind": 40}
+
+
+def parse_settings_form(form: Mapping[str, str]) -> tuple[dict[str, Any], dict[str, str]]:
+    """The Settings page: the site currency and the US-to-Canadian dollar rate (blank to clear)."""
+    errors: dict[str, str] = {}
+    data: dict[str, Any] = {"currency": _choice(form, "currency", CURRENCIES, errors, required=True)}
+    raw = form.get("usd_cad_rate", "").strip()
+    data["usd_cad_rate"] = None
+    if raw:
+        data["usd_cad_rate"] = parse_rate(raw)
+        if data["usd_cad_rate"] is None:
+            errors["usd_cad_rate"] = "Enter a rate like 1.38 (between 0.01 and 100, at most 6 decimal places)."
+    return data, errors
 
 
 def parse_village(raw: str | None) -> str | None:

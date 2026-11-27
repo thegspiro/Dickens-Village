@@ -170,13 +170,19 @@ class MySQLRepository:
 
         where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         order_sql = _ORDER_BY.get(filters.get("sort", "name"), _ORDER_BY["name"])
+        order_params: list[Any] = []
+        if filters.get("sort") == "estimated_value" and filters.get("usd_cad_rate"):
+            # Compare values entered in different currencies in US dollars.
+            order_sql = ("i.estimated_value IS NULL, CASE WHEN i.currency = 'CAD' THEN i.estimated_value / %s "
+                         "ELSE i.estimated_value END DESC, i.name ASC, i.id ASC")
+            order_params = [filters["usd_cad_rate"]]
         page = max(int(filters.get("page", 1)), 1)
 
         total_row = self._one(f"SELECT COUNT(*) AS n FROM items i {where_sql}", params)
         rows = self._all(
             f"SELECT i.*, {_EXTRAS_COUNT}, {_COVER_PHOTO} FROM items i {where_sql} "
             f"ORDER BY {order_sql} LIMIT %s OFFSET %s",
-            [*params, PAGE_SIZE, (page - 1) * PAGE_SIZE],
+            [*params, *order_params, PAGE_SIZE, (page - 1) * PAGE_SIZE],
         )
         self._end_read()
         return rows, int(total_row["n"]) if total_row else 0
@@ -1064,5 +1070,30 @@ class MySQLRepository:
             f"FROM items {where}",
             [*params, *params],
         )
+        # Money is added up per currency; the caller converts to the site currency.
+        money = self._all(
+            "SELECT category, currency, COALESCE(SUM(price_paid), 0) AS total_paid, "
+            f"COALESCE(SUM(estimated_value), 0) AS total_value FROM items {where} GROUP BY category, currency "
+            "ORDER BY category, currency",
+            params,
+        )
         self._end_read()
-        return {"by_category": by_category, "by_condition": by_condition, "totals": totals}
+        return {"by_category": by_category, "by_condition": by_condition, "totals": totals, "money": money}
+
+    # -- site settings ------------------------------------------------------------
+
+    def get_settings(self) -> dict[str, str]:
+        rows = self._all("SELECT name, value FROM site_settings")
+        self._end_read()
+        return {row["name"]: row["value"] for row in rows}
+
+    def save_settings(self, values: dict[str, str | None]) -> None:
+        """Set several settings in one transaction; a None value removes the setting."""
+        with self._write() as cur:
+            for name, value in values.items():
+                if value is None:
+                    cur.execute("DELETE FROM site_settings WHERE name = %s", (name,))
+                else:
+                    cur.execute("INSERT INTO site_settings (name, value) VALUES (%s, %s) AS new "
+                                "ON DUPLICATE KEY UPDATE value = new.value", (name, value))
+        log.info("Saved settings: %s", ", ".join(sorted(values)))
