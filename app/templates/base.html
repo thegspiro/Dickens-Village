@@ -36,6 +36,7 @@
       <a href="{{ url_for('main.catalog_browse') }}">Catalog</a>
       <a href="{{ url_for('main.offline_app') }}">Phone app</a>
       <a href="{{ url_for('main.summary') }}">Summary</a>
+      <a href="{{ url_for('main.settings_page') }}">Settings</a>
       <a class="button" href="{{ url_for('main.item_new') }}">Add piece</a>
       <form method="post" action="{{ url_for('main.logout') }}" class="inline" id="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

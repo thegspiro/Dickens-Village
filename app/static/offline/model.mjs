@@ -29,7 +29,7 @@
  */
 export const ITEM_FIELDS = [
   "category", "village", "name", "item_number", "series", "purchased_from", "condition_notes", "notes",
-  "year_introduced", "year_retired", "purchase_date", "price_paid", "estimated_value", "condition_grade",
+  "year_introduced", "year_retired", "purchase_date", "price_paid", "estimated_value", "currency", "condition_grade",
   "condition_checked_on", "has_original_box", "has_sleeve", "on_display", "height_in", "width_in",
   "depth_in", "box_height_in", "box_width_in", "box_depth_in", "catalog_id", "storage_place_id",
   "display_place_id",

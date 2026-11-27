@@ -31,8 +31,9 @@ var LABELS = {
   box_height_in: "Box height", box_width_in: "Box width", box_depth_in: "Box depth",
   purchase_date: "Purchase date", price_paid: "Price paid ($)", purchased_from: "Bought from",
   estimated_value: "Estimated value ($)", notes: "Notes", catalog_id: "Catalog link",
-  description: "Description", quantity: "Quantity", village: "Village",
+  description: "Description", quantity: "Quantity", village: "Village", currency: "Amounts are in",
 };
+var CURRENCIES = { USD: "US dollars", CAD: "Canadian dollars" };
 var NUMBER_FIELDS = ["year_introduced", "year_retired", "quantity", "catalog_id", "storage_place_id",
   "display_place_id"];
 var places = m.placeTree([]);
@@ -40,6 +41,8 @@ var village = m.DEFAULT_VILLAGE; // the village the list and new pieces are in, 
 
 async function loadPlaces() {
   places = m.placeTree(await db.getMeta("places", []));
+  var session = await db.getMeta("session", null); // refreshed by every sync
+  if (session && session.money && CURRENCIES[session.money.currency]) siteCurrency = session.money.currency;
   var saved = await db.getMeta("village", m.DEFAULT_VILLAGE);
   village = villageNames()[saved] ? saved : m.DEFAULT_VILLAGE;
 }
@@ -94,10 +97,17 @@ function uuid() {
 
 /* ---- formatting --------------------------------------------------------- */
 
-function money(v) {
+/* The site currency chosen on the full site's Settings page (USD until the server says otherwise). */
+var siteCurrency = "USD";
+
+/* An amount as it was entered, labelled with its currency unless it is the usual US dollars. */
+function money(v, currency) {
   if (v === null || v === undefined || v === "") return "—";
   var n = Number(v);
-  return isNaN(n) ? String(v) : "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (isNaN(n)) return String(v);
+  var cur = currency || "USD";
+  var prefix = cur === "USD" && siteCurrency === "USD" ? "$" : cur === "CAD" ? "CA$" : "US$";
+  return prefix + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 function storageText(v) {
@@ -118,6 +128,7 @@ function displayValue(field, v) {
   if (field === "category") return choices.categories[v] || v;
   if (field === "condition_grade") return choices.conditions[v] || v;
   if (field === "village") return villageNames()[v] || v;
+  if (field === "currency") return CURRENCIES[v] || v;
   if (field === "storage_place_id" || field === "display_place_id") return places.pathText(v) || "(a place not on this phone)";
   return String(v);
 }
@@ -314,8 +325,8 @@ async function pieceView(key) {
     ["Stored in", storageText(v), v.on_display ? " · On display" : ""],
     v.display_place_id ? ["Display spot", places.pathText(v.display_place_id)] : null,
     ["Purchased", v.purchase_date || "—", v.purchased_from ? " from " + v.purchased_from : ""],
-    ["Price paid", money(v.price_paid)],
-    ["Estimated value", money(v.estimated_value)],
+    ["Price paid", money(v.price_paid, v.currency)],
+    ["Estimated value", money(v.estimated_value, v.currency)],
     v.notes ? ["Notes", v.notes] : null,
   ].filter(Boolean);
 
@@ -482,7 +493,7 @@ var FORM = [
   ["Measurements (inches)", [["height_in", "text"], ["width_in", "text"], ["depth_in", "text"],
     ["box_height_in", "text"], ["box_width_in", "text"], ["box_depth_in", "text"]]],
   ["Purchase and value", [["purchase_date", "date"], ["price_paid", "decimal"], ["purchased_from", "text"],
-    ["estimated_value", "decimal"]]],
+    ["estimated_value", "decimal"], ["currency", "select-currency"]]],
   ["Notes", [["notes", "textarea"]]],
 ];
 
@@ -502,6 +513,11 @@ function field(spec, values, errors) {
       h("option", { value: "" }, kind === "select-display" ? "None" : kind === "select-extra-place" ? "With the piece" : "Not assigned"),
       known ? null : h("option", { value: String(v), selected: true }, "(a place not on this phone yet)"),
       opts.map(function (o) { return h("option", { value: String(o.id), selected: Number(v) === o.id }, o.text); }));
+  } else if (kind === "select-currency") {
+    var current = v || siteCurrency;
+    input = h("select", { id: id, name: name }, Object.keys(CURRENCIES).map(function (k) {
+      return h("option", { value: k, selected: current === k }, CURRENCIES[k]);
+    }));
   } else if (kind === "select-cat" || kind === "select-cond") {
     var opts = kind === "select-cat" ? choices.categories : choices.conditions;
     input = h("select", { id: id, name: name, required: required },
@@ -550,7 +566,7 @@ function validate(values, fields) {
 async function editView(key) {
   var rec = key ? await db.get("items", key) : null;
   if (key && !rec) return notFound();
-  var values = rec ? Object.assign({}, rec.local) : { catalog_id: null, village: village };
+  var values = rec ? Object.assign({}, rec.local) : { catalog_id: null, village: village, currency: siteCurrency };
   var pieceVillage = m.villageOf(values);
   var catalog = await db.all("catalog");
   var form = h("form", { class: "card", novalidate: true });
@@ -849,6 +865,7 @@ async function start() {
   db.enableOffline();
   var session = await db.getMeta("session", null);
   if (session && session.choices) choices = session.choices;
+  if (session && session.money && CURRENCIES[session.money.currency]) siteCurrency = session.money.currency;
   // Until the first sync of this visit finishes, don't claim everything is synced.
   renderPill(Object.assign({ state: navigator.onLine ? "syncing" : "offline" }, await countPending()));
   window.addEventListener("hashchange", route);

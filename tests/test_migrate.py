@@ -11,7 +11,7 @@ def test_discover_real_migrations_have_rollbacks():
     found = migrate.discover(MIGRATIONS)
     assert [m.version for m in found] == ["0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync", "0006_item_scans",
                                        "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places",
-                                       "0010_villages"]
+                                       "0010_villages", "0011_currency"]
     assert all(m.down_path is not None for m in found)
 
 

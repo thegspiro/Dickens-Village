@@ -109,6 +109,14 @@
       <div>{{ text(form, errors, 'price_paid', 'Price paid ($)', 14, extra='inputmode="decimal"') }}</div>
       <div>{{ text(form, errors, 'purchased_from', 'Bought from', 200) }}</div>
       <div>{{ text(form, errors, 'estimated_value', 'Estimated value ($)', 14, extra='inputmode="decimal"') }}</div>
+      <div>
+        <label for="currency">Amounts are in</label>
+        <select id="currency" name="currency">
+          {% set form_currency = form.get('currency') or (item.currency if item else money_settings().currency) %}
+          {% for code, name in CURRENCIES.items() %}<option value="{{ code }}"{% if code == form_currency %} selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+        {{ field_error(errors, 'currency') }}
+      </div>
     </div>
   </fieldset>
 

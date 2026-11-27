@@ -34,6 +34,7 @@ class FakeRepository:
         self.catalog_photos: dict[int, dict[str, Any]] = {}
         self.scans: dict[int, dict[str, Any]] = {}
         self.places: dict[int, dict[str, Any]] = {}
+        self.settings: dict[str, str] = {"currency": "USD"}
         self._ids = itertools.count(1)
         self.closed = 0
 
@@ -524,10 +525,27 @@ class FakeRepository:
                 "links": [{"building_id": b, "item_id": i} for b, i in sorted(self.links)],
                 "photos": photos, "scans": scans, "catalog_photos": catalog_photos}
 
+    def get_settings(self) -> dict[str, str]:
+        return dict(self.settings)
+
+    def save_settings(self, values: dict[str, str | None]) -> None:
+        for name, value in values.items():
+            if value is None:
+                self.settings.pop(name, None)
+            else:
+                self.settings[name] = value
+
     def collection_summary(self, village: str | None = None) -> dict[str, Any]:
         items = [i for i in self.items.values() if village is None or i["village"] == village]
         ids = {i["id"] for i in items}
+        money: dict[tuple[str, str], dict[str, Any]] = {}
+        for i in items:
+            key = (i["category"], i.get("currency") or "USD")
+            row = money.setdefault(key, {"category": key[0], "currency": key[1], "total_paid": 0, "total_value": 0})
+            row["total_paid"] += i.get("price_paid") or 0
+            row["total_value"] += i.get("estimated_value") or 0
         return {
+            "money": [money[k] for k in sorted(money)],
             "by_category": [],
             "by_condition": [],
             "totals": {"item_count": len(items), "total_paid": 0, "total_value": 0,

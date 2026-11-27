@@ -33,7 +33,8 @@ async function runSync() {
   emit("syncing");
   try {
     var session = await api.refreshToken();
-    await db.setMeta("session", { user: session.data.user, choices: session.data.choices });
+    await db.setMeta("session", { user: session.data.user, choices: session.data.choices,
+      money: session.data.money || null });
     await db.setMeta("authExpired", false);
     await pushItems();
     await pushExtras();

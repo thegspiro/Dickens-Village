@@ -27,7 +27,7 @@ pytestmark = pytest.mark.integration
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
 TABLES = ("item_scans", "item_photos", "item_links", "item_extras", "items", "catalog_photos", "catalog_items",
-          "storage_places")
+          "storage_places", "site_settings")
 CATALOG_DIR = Path(__file__).resolve().parents[2] / "data" / "catalog"
 
 
@@ -104,6 +104,12 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
         conn.commit()
+        assert migrate.migrate_down(conn, migrations) == "0011_currency"
+        with conn.cursor() as cur:
+            cur.execute("SHOW TABLES LIKE 'site_settings'")
+            assert cur.fetchone() is None
+            cur.execute("SHOW COLUMNS FROM items LIKE 'currency'")
+            assert cur.fetchone() is None
         assert migrate.migrate_down(conn, migrations) == "0010_villages"
         with conn.cursor() as cur:
             for table in ("items", "storage_places", "catalog_items"):
@@ -155,7 +161,7 @@ def test_migrations_are_idempotent_and_reversible(db_config, migrated):
         assert migrate.migrate_up(conn, migrations) == [
             "0001_initial", "0002_catalog", "0003_catalog_photos", "0004_measurements", "0005_sync",
             "0006_item_scans", "0007_photo_order_captions", "0008_catalog_listed", "0009_storage_places",
-            "0010_villages"]
+            "0010_villages", "0011_currency"]
         # The guarded ALTERs in 0002 must be harmless when run a second time.
         for m in migrations:
             migrate._execute_all(conn, migrate.split_statements(m.up_path.read_text()))
@@ -550,6 +556,7 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
     target = by_version["0007_photo_order_captions"]
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, list(by_version.values())) == "0011_currency"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0010_villages"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0009_storage_places"
         assert migrate.migrate_down(conn, list(by_version.values())) == "0008_catalog_listed"
@@ -566,7 +573,7 @@ def test_photo_order_backfill_numbers_old_photos_and_keeps_a_chosen_order(db_con
         conn.commit()
         assert migrate.migrate_up(conn, list(by_version.values())) == ["0007_photo_order_captions",
                                                                        "0008_catalog_listed", "0009_storage_places",
-                                                                       "0010_villages"]
+                                                                       "0010_villages", "0011_currency"]
 
         def order(item_id):
             with conn.cursor() as cur:
@@ -796,6 +803,7 @@ def test_storage_places_migration_turns_old_values_into_places(db_config, migrat
     by_version = {m.version: m for m in migrations}
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, migrations) == "0011_currency"
         assert migrate.migrate_down(conn, migrations) == "0010_villages"
         assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
         ids = _legacy_items(conn, [
@@ -808,7 +816,7 @@ def test_storage_places_migration_turns_old_values_into_places(db_config, migrat
             ("location only", "Basement", None, None),
             ("nowhere", None, None, None),
         ])
-        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places", "0010_villages"]
+        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places", "0010_villages", "0011_currency"]
         repo = MySQLRepository(conn)
         from app.places import PlaceTree
 
@@ -839,13 +847,14 @@ def test_storage_places_migration_turns_old_values_into_places(db_config, migrat
         assert repo.get_item(ids["full"])["storage_place_id"] == rows[ids["tray alone"]]["storage_place_id"]
 
         # Rolling back leaves Location / Tub / Tray as the app last kept them.
+        assert migrate.migrate_down(conn, migrations) == "0011_currency"
         assert migrate.migrate_down(conn, migrations) == "0010_villages"
         assert migrate.migrate_down(conn, migrations) == "0009_storage_places"
         with conn.cursor() as cur:
             cur.execute("SELECT storage_location, storage_tub, storage_tray FROM items WHERE id = %s", (ids["full"],))
             # the place's name; "Tray" is its type
             assert cur.fetchone() == {"storage_location": "Z", "storage_tub": None, "storage_tray": None}
-        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places", "0010_villages"]
+        assert migrate.migrate_up(conn, migrations) == ["0009_storage_places", "0010_villages", "0011_currency"]
     finally:
         migrate.migrate_up(conn, migrations)  # back to the latest schema even if an assertion failed
         _truncate_all(conn)
@@ -976,12 +985,13 @@ def test_villages_migration_keeps_existing_rows_in_dickens_village(db_config, mi
     migrations = migrate.discover(MIGRATIONS)
     conn = connect(db_config)
     try:
+        assert migrate.migrate_down(conn, migrations) == "0011_currency"
         assert migrate.migrate_down(conn, migrations) == "0010_villages"
         ids = _legacy_items(conn, [("before villages", "Attic", "3", None)])
         with conn.cursor() as cur:
             cur.execute("INSERT INTO storage_places (parent_id, name, kind) VALUES (NULL, 'Garage', NULL)")
         conn.commit()
-        assert migrate.migrate_up(conn, migrations) == ["0010_villages"]
+        assert migrate.migrate_up(conn, migrations) == ["0010_villages", "0011_currency"]
         repo = MySQLRepository(conn)
         assert repo.get_item(ids["before villages"])["village"] == "dickens"
         assert {p["village"] for p in repo.list_places()} == {"dickens"}
@@ -992,6 +1002,7 @@ def test_villages_migration_keeps_existing_rows_in_dickens_village(db_config, mi
         with pytest.raises(DuplicatePlace):
             _place_in(repo, "garage", "holy-land")
         # ...which is what stops a rollback until one is renamed.
+        assert migrate.migrate_down(conn, migrations) == "0011_currency"
         with pytest.raises(pymysql.err.IntegrityError):
             migrate.migrate_down(conn, migrations)
         conn.rollback()
@@ -1001,7 +1012,7 @@ def test_villages_migration_keeps_existing_rows_in_dickens_village(db_config, mi
             cur.execute("UPDATE storage_places SET name = 'Garage 2' WHERE village = 'holy-land'")
         conn.commit()
         assert migrate.migrate_down(conn, migrations) == "0010_villages"
-        assert migrate.migrate_up(conn, migrations) == ["0010_villages"]
+        assert migrate.migrate_up(conn, migrations) == ["0010_villages", "0011_currency"]
     finally:
         migrate.migrate_up(conn, migrations)
         _truncate_all(conn)
@@ -1094,3 +1105,31 @@ def test_catalog_villages_and_filters(db_config, repo):
     owned, owned_total = repo.browse_catalog(owned_only=True, village="holy-land")
     assert owned_total == 1 and owned[0]["owned_count"] == 1
     assert repo.browse_catalog(owned_only=True)[0][0]["owned_count"] == 2
+
+
+# -- currencies and settings --------------------------------------------------------
+
+
+def test_settings_round_trip(repo):
+    assert repo.get_settings().get("currency") in (None, "USD")  # seeded USD; other tests truncate it
+    repo.save_settings({"currency": "CAD", "usd_cad_rate": "1.38", "usd_cad_rate_set_on": "2026-11-27"})
+    assert repo.get_settings() == {"currency": "CAD", "usd_cad_rate": "1.38", "usd_cad_rate_set_on": "2026-11-27"}
+    repo.save_settings({"currency": "USD", "usd_cad_rate": None, "usd_cad_rate_set_on": None})
+    assert repo.get_settings() == {"currency": "USD"}
+
+
+def test_currency_column_summary_and_value_sort(repo):
+    usd = repo.create_item(item(name="USD piece", price_paid="40", estimated_value="100"))
+    cad = repo.create_item(item(name="CAD piece", price_paid="55.20", estimated_value="120", currency="CAD"))
+    assert repo.get_item(usd)["currency"] == "USD" and repo.get_item(cad)["currency"] == "CAD"
+    money_rows = {r["currency"]: r for r in repo.collection_summary()["money"]}
+    assert money_rows["USD"]["total_paid"] == Decimal("40.00")
+    assert money_rows["CAD"]["total_value"] == Decimal("120.00")
+
+    def order(**extra):
+        return [r["name"] for r in repo.list_items({**filters(sort="estimated_value"), **extra})[0]]
+
+    assert order() == ["CAD piece", "USD piece"]  # raw numbers: 120 before 100
+    # at 1.38, CA$120 is about US$87, so the US$100 piece is worth more
+    assert order(usd_cad_rate=Decimal("1.38")) == ["USD piece", "CAD piece"]
+    assert repo.snapshot()["items"][0]["currency"] in ("USD", "CAD")

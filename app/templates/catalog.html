@@ -39,7 +39,7 @@
         <td data-label="Item #">{{ r.item_number or '—' }}</td>
         <td data-label="List">{{ r.list_name|catalog_list }}</td>
         <td data-label="Years">{{ r.year_issued or '?' }}–{{ 'Current' if r.is_current else (r.year_retired or '?') }}</td>
-        <td data-label="Original retail" class="num">{{ r.srp_usd | money or '—' }}</td>
+        <td data-label="Original retail" class="num">{{ retail(r) or '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>
