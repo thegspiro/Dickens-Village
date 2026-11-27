@@ -31,9 +31,15 @@
     return typeof url === "string" && url.charAt(0) === "/" && url.charAt(1) !== "/" && url.indexOf("\\") === -1;
   }
 
+  /* The list's name; entries cached before list_label existed only carry the list key. */
+  function listName(r) {
+    if (r.list_label) return r.list_label;
+    return r.list === "accessories" ? "Accessories" : "Lighted";
+  }
+
   /* Second line of a suggestion: which list it is from, plus any notes. */
   function detailLine(r) {
-    var parts = [r.list === "accessories" ? "Accessories list" : "Lighted list"];
+    var parts = [listName(r) + " list"];
     // For set pieces the first line already names the set, so skip the repeat.
     if (r.details && !(r.parent_name && r.details === 'Part of "' + r.parent_name + '"')) {
       parts.push(r.details);

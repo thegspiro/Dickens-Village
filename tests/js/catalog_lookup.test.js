@@ -48,6 +48,8 @@ test("detailLine names the list and drops a repeated set name", () => {
     'Lighted list · Part of "Christmas Carol Cottage" Limited');
   assert.equal(lookup.detailLine({ list: "accessories", details: "set of 2", parent_name: null }),
     "Accessories list · set of 2");
+  assert.equal(lookup.detailLine({ list: "general-accessories", list_label: "General Village Accessories",
+    details: "Set of 4", parent_name: null }), "General Village Accessories list · Set of 4");
 });
 
 test("isLocalUrl only accepts same-site paths", () => {

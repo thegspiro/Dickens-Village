@@ -20,7 +20,7 @@
       <dt>Catalog listing</dt>
       <dd>
         <a href="{{ url_for('main.catalog_entry', catalog_id=catalog.id) }}">{{ catalog.item_number or 'No number' }} · {{ catalog.name }}</a>{% if catalog.parent_name %} <span class="muted">(part of “{{ catalog.parent_name }}”)</span>{% endif %}<br>
-        <span class="muted">{{ 'Lighted' if catalog.list_name == 'lighted' else 'Accessories' }} list · {{ catalog.year_issued or '?' }}–{{ 'Current' if catalog.is_current else (catalog.year_retired or '?') }}</span>
+        <span class="muted">{{ catalog.list_name|catalog_list }} list · {{ catalog.year_issued or '?' }}–{{ 'Current' if catalog.is_current else (catalog.year_retired or '?') }}</span>
         {% if catalog.details %}<br><span class="muted">{{ catalog.details }}</span>{% endif %}
       </dd>
       <dt>Original retail</dt><dd>{{ (catalog.srp_usd | money ~ ' US') if catalog.srp_usd is not none else '—' }}{% if catalog.srp_cad is not none %} · {{ catalog.srp_cad | money }} CAD{% endif %}</dd>

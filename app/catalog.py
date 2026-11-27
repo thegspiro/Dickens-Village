@@ -61,6 +61,19 @@ _LENGTHS = {
 }
 
 
+# How each reference list is named on the website and in the lookups.
+LIST_LABELS = {
+    "lighted": "Lighted",
+    "accessories": "Accessories",
+    "general-accessories": "General Village Accessories",
+}
+
+
+def list_label(list_name: str | None) -> str:
+    """ "Lighted", "General Village Accessories"; a list with no label reads as its name."""
+    return LIST_LABELS.get(list_name or "", list_name or "")
+
+
 class CatalogError(ValueError):
     pass
 

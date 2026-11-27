@@ -15,9 +15,49 @@ DATA = Path(__file__).resolve().parent.parent / "data" / "catalog"
 
 def test_committed_catalog_is_valid():
     rows = catalog.load_directory(DATA)
-    assert len(rows) == 760
+    assert len(rows) == 1949
+    assert len(catalog.parse_rows(DATA / "dickens_village_2025.csv")) == 760
+    assert len(catalog.parse_rows(DATA / "general_village_accessories_2021.csv")) == 1189
     lists = {r.values["list_name"] for r in rows}
-    assert lists == {"lighted", "accessories"}
+    assert lists == {"lighted", "accessories", "general-accessories"}
+    assert all(name in catalog.LIST_LABELS for name in lists)
+
+
+def test_general_accessories_spot_checks():
+    rows = [r.values for r in catalog.parse_rows(DATA / "general_village_accessories_2021.csv")]
+    assert all(v["source_key"].startswith("general-2021-") and v["default_category"] == "accessory" for v in rows)
+    by_number = {}
+    for v in rows:
+        by_number.setdefault(v["item_number"], []).append(v)
+
+    snow = {v["details"]: v for v in by_number["56.49981"]}["7oz Bag"]
+    assert snow["name"] == "Real Plastic Snow"
+    assert (snow["year_issued"], snow["year_retired"]) == (1977, 2006)
+    assert (snow["srp_usd"], snow["srp_cad"]) == (Decimal("3.00"), Decimal("8.00"))
+
+    lamps = by_number["56.59960"][0]
+    assert lamps["name"] == "Village Double Street Lamps" and lamps["details"] == "Set of 4"
+    assert lamps["is_current"] == 1 and lamps["year_retired"] is None
+
+    # A name the splitter would have lost to a doubled opening quote.
+    assert by_number["4030905"][0]["name"] == "Yosemite Spruce Tree"
+    # A price printed in the description column is left blank, not guessed.
+    trees = by_number["4047588"][0]
+    assert trees["name"] == "Tudor Gardens Trees" and trees["srp_usd"] is None
+    assert trees["srp_cad"] == Decimal("28.00") and "22..50" in trees["source_text"]
+    # Exact repeats in the source are listed once.
+    assert len(by_number["6005501"]) == 1
+
+    issues = (DATA / "general_village_accessories_2021_source_issues.txt").read_text()
+    assert "4047588" in issues and "22..50" in issues
+    assert "6005501 Lit Deer Yard Décor: listed again" in issues
+
+
+def test_list_labels():
+    assert catalog.list_label("lighted") == "Lighted"
+    assert catalog.list_label("general-accessories") == "General Village Accessories"
+    assert catalog.list_label("someday-list") == "someday-list"
+    assert catalog.list_label(None) == ""
 
 
 def test_committed_catalog_spot_checks():
@@ -110,7 +150,7 @@ def test_parse_rejects_duplicate_keys_and_missing_columns(tmp_path):
 
 def test_check_command(tmp_path, capsys):
     assert catalog.main(["check", str(DATA)]) == 0
-    assert "760 catalog rows are valid" in capsys.readouterr().out
+    assert "1949 catalog rows are valid" in capsys.readouterr().out
     write_csv(tmp_path, GOOD.replace("House", ""))
     assert catalog.main(["check", str(tmp_path)]) == 1
 
@@ -157,10 +197,10 @@ class LockConn:
 def test_sync_batches_and_commits():
     rows = catalog.load_directory(DATA)
     conn = LockConn()
-    assert catalog.sync(conn, rows, batch_size=300) == 760
-    assert conn.batches == [300, 300, 160] and conn.committed
+    assert catalog.sync(conn, rows, batch_size=300) == 1949
+    assert conn.batches == [300] * 6 + [149] and conn.committed
     unlist = [s for s in conn.statements if s.startswith("UPDATE catalog_items SET listed = 0")]
-    assert len(unlist) == 1 and unlist[0].count("%s") == 760
+    assert len(unlist) == 1 and unlist[0].count("%s") == 1949
 
 
 def test_sync_requires_lock():
@@ -212,7 +252,7 @@ def test_search_result_shape(logged_in, seeded):
     assert resp.headers["Cache-Control"] == "private, no-store"
     (r,) = resp.get_json()["results"]
     assert r == {
-        "id": seeded["acc"], "list": "accessories", "item_number": "56.58539", "name": "The Big Prize Turkey",
+        "id": seeded["acc"], "list": "accessories", "list_label": "Accessories", "item_number": "56.58539", "name": "The Big Prize Turkey",
         "details": None, "series": "A Christmas Carol", "year_issued": 2001, "year_retired": 2008,
         "is_current": False, "listed": True, "srp_usd": "27.50", "srp_cad": "44.00", "category": "accessory", "parent_name": None,
         "url": f"/catalog/{seeded['acc']}", "photo_count": 0, "thumb_url": None,

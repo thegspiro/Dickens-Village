@@ -20,5 +20,23 @@ pieces under their set. `normalize.py` splits names from notes, tags series, app
 `OVERRIDES` for lines the parser cannot read, and writes problems in the source (impossible
 years, duplicate item numbers) to the issues file instead of guessing a correction.
 
+The General Village Accessories (2021) list was built the same way, with options for its
+layout and its own profile in `normalize.py`:
+
+```sh
+python dump_lines.py General_Village_Accessories_2021.pdf 500 /tmp/general.json \
+    --retired-x 370 --skip '^General Village Accessories$'
+python build_records.py --out /tmp/general-records.json general=/tmp/general.json
+python normalize.py /tmp/general-records.json ../../data/catalog/general_village_accessories_2021.csv \
+    ../../data/catalog/general_village_accessories_2021_source_issues.txt --profile general-2021
+```
+
+`--retired-x` moves the boundary of the "Year Retired" column (this PDF prints retired years
+a few points further left). `--skip` drops page titles, and `--section` (not needed here)
+records section headings so a profile can set the series from them. The `general-2021`
+profile also drops pieces listed twice with the same years and prices, and reports US and
+Canadian prices that can't both be right. The default profile, `dickens-2025`, still
+reproduces `dickens_village_2025.csv` byte for byte.
+
 A different year's PDF may lay out differently, so check the output against the PDF before
 committing it. Every row keeps its `source_page` and original `source_text` for that purpose.
